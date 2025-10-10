@@ -1,0 +1,32 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+paths:
+  raw_dir: "/scratch/$USER/meerkat/data/raw"
+  interim_dir: "/scratch/$USER/meerkat/data/interim"
+  processed_dir: "/scratch/$USER/meerkat/data/processed"
+  reports_dir: "/scratch/$USER/meerkat/data/reports"
+  sky_xmatches_dir: "/scratch/$USER/meerkat/data/processed/Sky-CrossMatches"
+
+reference:
+  name: "Lband_ref"
+  ms_paths: []
+  images: []
+
+tests: []
+
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+
+xmatch:
+  max_sep_arcsec: 1.0
+
+extra:
+  force_calibrate: false
+  xmatch_pairs: []
+  positions: []
+  flux: {}
