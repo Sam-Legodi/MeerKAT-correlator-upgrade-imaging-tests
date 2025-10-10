@@ -12,16 +12,23 @@ This repository standardizes the end-to-end process and makes it easy to share r
 * [Prerequisites](#prerequisites)
 * [Installation](#installation)
 * [Manual Data Download (Step 1)](#manual-data-download-step-1)
-* [Configuration](#configuration)
-* [Usage](#usage)
+* [How to Run](#how-to-run)
 
-  * [Step 2 — Visibility QA](#step-2--visibility-qa)
-  * [Step 3 — Calibrate & Image (CASA)](#step-3--calibrate--image-casa)
-  * [Step 4 — QA for Newly Corrected Fields](#step-4--qa-for-newly-corrected-fields)
-  * [Step 5 — Source Finding (PyBDSF)](#step-5--source-finding-pybdsf)
-  * [Step 6 — Cross-Match Catalogues](#step-6--crossmatch-catalogues)
-  * [Step 7 — Astrometry & Flux Analyses](#step-7--astrometry--flux-analyses)
-* [Outputs](#outputs)
+  * [1) Install the project locally (once per machine)](#1-install-the-project-locally-once-per-machine)
+  * [2) Prepare a master config](#2-prepare-a-master-config)
+  * [3) Run individual steps (surgical control)](#3-run-individual-steps-surgical-control)
+    * [3.1 Visibility QA (Step 2 / Step 4 repeat)](#31-visibility-qa-step-2--step-4-repeat)
+    * [3.2 Calibrate & Image with CASA (Step 3)](#32-calibrate--image-with-casa-step-3)
+    * [3.3 Source finding with PyBDSF (Step 5)](#33-source-finding-with-pybdsf-step-5)
+    * [3.4 Cross-matching catalogues (Step 6)](#34-cross-matching-catalogues-step-6)
+    * [3.5 Astrometry (positions) analysis (Step 7a)](#35-astrometry-positions-analysis-step-7a)
+    * [3.6 Flux analysis (Step 7b)](#36-flux-analysis-step-7b)
+  * [4) Run the whole pipeline (hands-off)](#4-run-the-whole-pipeline-hands-off)
+  * [5) Where things go (default)](#5-where-things-go-default)
+  * [6) Quick verification checklist](#6-quick-verification-checklist)
+  * [7) Common gotchas (and fixes)](#7-common-gotchas-and-fixes)
+  * [8) Commit your config and results?](#8-commit-your-config-and-results)
+  * [TL;DR sequence](#tldr-sequence)
 * [Reproducibility & Provenance](#reproducibility--provenance)
 * [Examples & Tests](#examples--tests)
 * [Legacy Scripts](#legacy-scripts)
@@ -110,27 +117,29 @@ MeerKAT-correlator-upgrade-imaging-tests/
 
 ## Installation
 
-Create a local virtual environment and install this package in editable mode:
+Create a dedicated virtual environment and install this repository in editable mode so CLI wrappers pick up your edits immediately.
 
 ```bash
-# Option A: using uv (fast)
-uv venv .venv && source .venv/bin/activate
-uv pip install -e .
-pre-commit install
-
-# Option B: standard tools
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-pre-commit install
 ```
-
-Enable Git LFS (recommended if storing artifacts here):
+OR (If a default Conda environment is active. You can still follow the steps—just make sure you’re in the repo folder and pick one environment strategy (either keep using Conda, or use python -m venv; don’t mix them).):
 
 ```bash
-git lfs install
-# .gitattributes already includes patterns like:
-# *.fits, *.ms*, *.image, *.mms, *.docx
+conda create -n meerkat-ci python=3.10 -y
+conda activate meerkat-ci
+pip install -e .
+
+```
+
+`pip install -e .` registers the package `meerkat_corr_imaging` (under `src/`), so `python -m meerkat_corr_imaging.cli ...` works anywhere inside the repo. Leave the environment with `deactivate` and reactivate it later with `source .venv/bin/activate`. CASA remains a separate binary; make sure `casa` is on your `PATH` or set `CASA=/path/to/casa`.
+
+Optional but recommended tooling:
+
+```bash
+pre-commit install
+git lfs install  # large images/catalogues are already listed in .gitattributes
 ```
 
 ---
@@ -148,168 +157,257 @@ This step remains manual due to authentication and archive UX.
 
 ---
 
-## Configuration
+## How to Run
 
-Copy an example config and edit paths/parameters:
+### 1) Install the project locally (once per machine)
+
+You are turning the repo into an importable Python package so wrappers and the CLI work.
+
+```bash
+# create and enter a clean virtualenv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# install this repo in editable mode (so edits reflect immediately)
+pip install -e .
+```
+
+What this does:
+
+* `pip install -e .` registers the package `meerkat_corr_imaging` (under `src/`), so `python -m meerkat_corr_imaging.cli ...` works.
+* You can leave the venv with `deactivate` and reactivate it later with `source .venv/bin/activate`.
+
+Tip: if you use CASA, it runs outside the venv as a separate binary. Just make sure `casa` is on your shell `PATH` (or set `CASA=/path/to/casa`).
+
+---
+
+### 2) Prepare a master config
+
+Make a working copy of the example and fill in your paths (MS files, FITS images, and so on):
 
 ```bash
 cp configs/example_local.yaml config.yaml
 ```
 
-**`configs/example_local.yaml` (excerpt):**
+Edit `config.yaml`:
+
+* `reference.ms_paths` -> corrected MeasurementSets for your reference field
+* `tests[].ms_paths` -> corrected MeasurementSets for each test field
+* `reference.images` and `tests[].images` -> PB-corrected continuum, MFS, low, and high FITS files
+* `extra.xmatch_pairs`, `extra.positions`, `extra.flux` -> wire the files your wrappers need
+* `paths.*` -> where outputs will be written (defaults live under `data/` and are auto-created)
+
+You can keep multiple configs (for example, one per dataset) and pass `--config path/to.yaml` to each command.
+
+**`config.yaml` scaffold (excerpt):**
 
 ```yaml
 project_name: "MeerKAT-correlator-upgrade-imaging-tests"
-out_root: "data"
-
-raw_dir: "data/raw"
-interim_dir: "data/interim"
-processed_dir: "data/processed"
-reports_dir: "data/reports"
+paths:
+  raw: "data/raw"
+  interim: "data/interim"
+  processed: "data/processed"
+  reports: "data/reports"
 
 reference:
   name: "ref_field"
-  ms_paths: []     # corrected MS paths (from archive)
-  images: []       # PB-corrected continuum/cubes
+  ms_paths: []
+  images: []
 
 tests:
   - name: "test_field_A"
     ms_paths: []
     images: []
 
-pybdsf:
-  thresh_isl: 3.5
-  thresh_pix: 5.0
-  rms_box: [50, 10]
-
-xmatch:
-  max_sep_arcsec: 1.0
-
-casa:
-  scans: ""     # "1,2,5" or empty for all
-  lowband_hz: [8.98e8, 1.00e9]
-  highband_hz: [1.46e9, 1.70e9]
-
-report:
-  include_interpretation: true
+extra:
+  xmatch_pairs: []
+  positions: []
+  flux: {}
 ```
 
 ---
 
-## Usage
+### 3) Run individual steps (surgical control)
 
-You can run scripts directly from `scripts/` **or** via the optional CLI in `src/meerkat_corr_imaging/cli.py` (exposed as `mci` if configured).
+Each CLI command wraps a helper in `src/meerkat_corr_imaging/steps/...`, which in turn runs the actual script under `scripts/` with the arguments pulled from `config.yaml`.
 
-### Step 2 — Visibility QA
-
-Analyze corrected visibilities for reference and tests.
-
-**Direct script:**
+#### 3.1 Visibility QA (Step 2 / Step 4 repeat)
 
 ```bash
-python scripts/vis_amp_analyze.py --config config.yaml
+python -m meerkat_corr_imaging.cli vis --config config.yaml
 ```
 
-**Generates:**
+What happens:
 
-* CSVs:
-  `perrow_amp_stats.csv` (MEAN, RMS, FLAG_FRAC, ANT1, ANT2, SCAN, DDID, SPW, POL),
-  `mean_vs_scan.csv`, `rms_vs_scan.csv`, `flagging_vs_scan.csv`, `flagging_by_channel.csv`
-* Figures:
-  `mean_vs_scan_split.png`, `rms_vs_scan_split.png`,
-  `mean_per_antenna_split.png`, `rms_per_antenna_split.png`,
-  `mean_vs_baseline_split.png`, `rms_vs_baseline_split.png`,
-  `flagging_vs_scan_split.png`, `flagging_per_antenna_split.png`,
-  `flagging_by_channel.png`
-* A concise `.docx` report
+* For each `reference.ms_paths` and each test `ms_paths`, it runs `scripts/vis_amp_analyze.py ...`.
+* Outputs: CSVs, plots, and a concise DOCX report, typically under `data/interim/<msbase>/` (the wrapper passes `--outdir`).
 
-### Step 3 — Calibrate & Image (CASA)
+Check after running:
 
-For any fields not already corrected in the archive:
+* `data/interim/*/perrow_amp_stats.csv`
+* `data/interim/*/mean_vs_scan_split.png` and other QA plots
+* A small `.docx` in `data/reports/` (depending on your script)
 
-1. **Calibration** (`standalone_xxyy_solve.py`): delay → bandpass → gaincal (amp & phase) → flux bootstrap → leakage (D-terms) → applycal.
-2. **Imaging** (`tclean_two_bands.py`):
-
-   * lowband: 8.98e8–1.00e9 Hz
-   * highband: 1.46e9–1.70e9 Hz
-   * If bands not covered, fallback to lower/upper **25%** of available span.
-   * Produces per-band images and optional per-scan images; FITS and QA text emitted alongside.
-
-**CASA 6 usage (example):**
+#### 3.2 Calibrate & Image with CASA (Step 3)
 
 ```bash
-casa --nologger --log2term -c scripts/tclean_two_bands.py [--scans=1,2,3] <ms1> <ms2> ...
+python -m meerkat_corr_imaging.cli cal --config config.yaml
 ```
 
-> The `tclean_two_bands.py` docstring in `scripts/` describes run modes, scan selection, and QA-only behavior.
+What happens:
 
-### Step 4 — QA for Newly Corrected Fields
+* If `extra.force_calibrate: true`, it runs `standalone_xxyy_solve.py` once (rare).
+* Then it runs `casa -c scripts/tclean_two_bands.py [--scans=...] <all MS>`.
+* Products go next to each MS, usually in `<msdir>/images/...` with FITS exported; QA text files are created.
 
-Re-run Step 2 on any newly corrected visibilities produced by Step 3.
+Before running:
 
-### Step 5 — Source Finding (PyBDSF)
+* Ensure `casa` is callable: `which casa`. If not, `export CASA=/full/path/to/casa` and rerun.
 
-Run PyBDSF on:
-
-* Per-scan MFS images
-* All-scans full-band MFS
-* Low-band (lower quartile) MFS
-* High-band (upper quartile) MFS
-
-**Command:**
+#### 3.3 Source finding with PyBDSF (Step 5)
 
 ```bash
-python scripts/pybdsf_srcfind.py --config config.yaml
+python -m meerkat_corr_imaging.cli src --config config.yaml
 ```
 
-### Step 6 — Cross-Match Catalogues
+What happens:
 
-Cross-match each test catalogue with the corresponding reference catalogue.
+* Collects images from `reference.images` plus each test `images` (and any `extra.images_globs`).
+* Runs `scripts/pybdsf_srcfind.py --images ... [--isl ... --pix ... --freq-* ...]`.
+* PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
 
-**Command:**
+Sanity check:
+
+* Look for generated catalogues (FITS tables), usually `*_gaul.fits` or `*_srl.fits`.
+
+#### 3.4 Cross-matching catalogues (Step 6)
 
 ```bash
-python scripts/xmatch_pybdsf.py --config config.yaml
+python -m meerkat_corr_imaging.cli xm --config config.yaml
 ```
 
-Outputs one matched catalogue per pair.
+What happens:
 
-### Step 7 — Astrometry & Flux Analyses
+* Reads `extra.xmatch_pairs`: each item is `[input1, input2]` or `[input1, input2, output]`.
+* Calls `scripts/xmatch_pybdsf.py` for each pair with `--max-error` and friends.
+* Without an explicit `output`, the wrapper creates one under `data/processed/Sky-CrossMatches/` with a sensible name.
 
-**Positions** (`2025_positions_analysis.py`):
+Verify:
 
-* Reads a cross-match FITS table (reference × other)
-* Computes ΔRA/ΔDec (east+, north+) using spherical geometry
-* Produces five figures (pos_var CMC1×CMC2)
-* Optionally overlays per-scan cross-match tables on the same axes
-* Draws enclosing ellipses (center = mean, width/height = 2×max deviation)
-* Legends outside axes to avoid obscuring markers
-* Exports a DOCX report with physical interpretations
+* `data/processed/Sky-CrossMatches/*.fits` exists and has match columns.
 
-**CLI example:**
+#### 3.5 Astrometry (positions) analysis (Step 7a)
 
 ```bash
-python scripts/2025_positions_analysis.py \
-  --xmatch-table /path/to/refXother.fits \
-  --ref-fits /path/to/reference_image.fits \
-  --other-fits /path/to/other_image.fits \
-  --per-scan-glob "/path/to/per_scan/refXscan*.fits"
+python -m meerkat_corr_imaging.cli pos --config config.yaml
 ```
 
-**Flux** (`2025_Flux_analysis.ipynb`):
+What happens:
 
-* Compares matched **L-band** and **UHF-band** PyBDSF catalogues against a reference continuum image
-* Quantifies flux consistency, builds diagnostic plots, and compiles a DOCX summary
+* Loops over `extra.positions` entries, each with `xmatch_table`, `ref_fits`, `other_fits`, and optional `per_scan_glob`, `otherdatatag`.
+* Calls `scripts/positions_analysis.py ...` to generate the five figures plus a DOCX with interpretation.
+
+Outputs:
+
+* Plots and DOCX files under `data/reports/crossmatched-positions/` (or wherever your script writes them).
+
+#### 3.6 Flux analysis (Step 7b)
+
+```bash
+python -m meerkat_corr_imaging.cli flux --config config.yaml
+```
+
+What happens:
+
+* Reads `extra.flux` with `ref_low_xmatch`, `ref_high_xmatch`, `ref_mfs_xmatch` (required), and optional `scans_glob`, `docx_name`.
+* Calls `scripts/flux_analysis.py ...` to produce plots plus a DOCX summary.
+
+Outputs:
+
+* Plots and DOCX files under `data/reports/flux/` (or your configured location).
 
 ---
 
-## Outputs
+### 4) Run the whole pipeline (hands-off)
 
-* `data/interim/` — calibration products, QA CSVs, intermediary tables
-* `data/processed/` — images, PyBDSF catalogues, cross-matches
-* `data/reports/` — DOCX reports and figures from Steps 2, 3 (QA), and 7
+If you have filled the config for every step:
 
-Each run should record a `run_id` (e.g., `YYYYMMDD_HHMMSS`) and write a `metadata.json` with tool versions, git commit, and config snapshot.
+```bash
+python -m meerkat_corr_imaging.cli all --config config.yaml
+```
+
+Order:
+
+1. `vis`
+2. `cal`
+3. `src`
+4. `xm`
+5. `pos`
+6. `flux`
+
+Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
+
+---
+
+### 5) Where things go (default)
+
+* Raw archive downloads: `data/raw/`
+* Interim QA and CSVs: `data/interim/<msbase>/...`
+* Processed products (images, catalogues, cross-matches): `data/processed/...`
+  * Cross-matches specifically: `data/processed/Sky-CrossMatches/`
+* Reports (DOCX, figures): `data/reports/...`
+
+You can change these in `config.yaml -> paths.*`. Directories are created automatically.
+
+---
+
+### 6) Quick verification checklist
+
+* After `vis`: CSVs and PNGs under `data/interim/*/`
+* After `cal`: CASA images in each MS `images/` directory with FITS and QA exports
+* After `src`: PyBDSF catalogues (FITS) near images or in `data/processed/`
+* After `xm`: matched FITS tables in `data/processed/Sky-CrossMatches/`
+* After `pos` and `flux`: DOCX files plus plots under `data/reports/`
+
+---
+
+### 7) Common gotchas (and fixes)
+
+* `casa` not found -> export `CASA=/full/path/to/casa` or add it to your `PATH`; retry `mci cal`
+* Permission errors writing under `data/` -> adjust `paths.*` to point at a writable location
+* Wrong FITS paths -> update `config.yaml`; wrappers only forward paths
+* No outputs appeared -> read the console; wrappers print the exact script command so you can rerun it by hand
+* Long CASA runs -> expected; the wrapper streams CASA logs
+
+---
+
+### 8) Commit your config and results?
+
+* Commit `configs/example_local.yaml` (sanitised), but avoid committing personal `config.yaml` files with private paths.
+* Do not commit bulky products unless you have Git LFS set up; prefer a tiny demo under `examples/tiny-demo/`.
+
+---
+
+### TL;DR sequence
+
+```bash
+# (once) setup
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+cp configs/example_local.yaml config.yaml  # edit paths inside
+
+# run a step (or all)
+python -m meerkat_corr_imaging.cli vis  --config config.yaml
+python -m meerkat_corr_imaging.cli cal  --config config.yaml
+python -m meerkat_corr_imaging.cli src  --config config.yaml
+python -m meerkat_corr_imaging.cli xm   --config config.yaml
+python -m meerkat_corr_imaging.cli pos  --config config.yaml
+python -m meerkat_corr_imaging.cli flux --config config.yaml
+# or
+python -m meerkat_corr_imaging.cli all  --config config.yaml
+```
+
+> **To do:** add a `Makefile` with shortcuts (`make vis`, `make all`) and a tiny `examples/tiny-demo` config for a reproducible miniature run.
 
 ---
 
@@ -408,32 +506,3 @@ If this work contributes to published research, please cite the repository. Add 
 ```
 
 ---
-
-### Quick Commands (optional)
-
-```bash
-# Environment
-uv venv .venv && source .venv/bin/activate
-uv pip install -e .
-pre-commit install
-
-# Run selected stages (examples):
-python scripts/vis_amp_analyze.py --config config.yaml
-casa --nologger --log2term -c scripts/tclean_two_bands.py <ms...>
-python scripts/pybdsf_srcfind.py --config config.yaml
-python scripts/xmatch_pybdsf.py --config config.yaml
-python scripts/2025_positions_analysis.py --xmatch-table ... --ref-fits ... --other-fits ...
-# Flux analysis (script version; no notebook needed)
-# Option A: via project CLI wrapper (recommended)
-python -m meerkat_corr_imaging.cli flux --config config.yaml
-
-# Option B: call the script directly
-python scripts/flux_analysis.py --config config.yaml
-
-# Outputs:
-# - Figures and tables under data/reports/flux/ (or your configured reports_dir)
-# - DOCX summary: data/reports/flux/flux_summary.docx
-
-```
-
-This README is intended to be a single, clear starting point for you and your colleagues to rerun analyses or extend the workflow.

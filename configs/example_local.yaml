@@ -1,0 +1,81 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Where outputs go (created if missing)
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  reports_dir: "data/reports"
+  sky_xmatches_dir: "data/processed/Sky-CrossMatches"
+
+# Reference dataset
+reference:
+  name: "Lband_ref"
+  ms_paths:
+    - "/ABS/PATH/TO/ref_refcorr.ms"
+  images:
+    - "/ABS/PATH/TO/ref_image_mfs_pbcor.fits"
+    - "/ABS/PATH/TO/ref_image_lowband_pbcor.fits"
+    - "/ABS/PATH/TO/ref_image_highband_pbcor.fits"
+
+# One or more tests
+tests:
+  - name: "Lband_1757723806"
+    ms_paths:
+      - "/ABS/PATH/TO/Lband_1757723806.SDPAllcorrected.ms"
+    images:
+      - "/ABS/PATH/TO/Lband_1757723806.SDPAllcorrected.MFS.fits"
+      - "/ABS/PATH/TO/Lband_1757723806_lowband.fits"
+      - "/ABS/PATH/TO/Lband_1757723806_highband.fits"
+
+# CASA settings
+casa:
+  scans: ""                 # e.g. "1,2,5" to limit per-scan imaging
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+
+# PyBDSF defaults
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  freq_mhz: 1284           # used if FITS lacks freq
+
+# Cross-match defaults
+xmatch:
+  max_sep_arcsec: 1.0
+  ra_col_1: "RA"
+  dec_col_1: "DEC"
+  ra_col_2: "RA"
+  dec_col_2: "DEC"
+  coord_frame: "icrs"
+  one_to_many: false
+
+# Extra step-specific wiring
+extra:
+  # For step 3: only run standalone calibration if explicitly requested
+  force_calibrate: false
+
+  # For step 5: you can add additional globs to process
+  images_globs: []
+
+  # For step 6: list pairs to cross-match (output auto-placed if omitted)
+  xmatch_pairs:
+    - ["/ABS/PATH/TO/ref_lowband_catalog.fits", "/ABS/PATH/TO/Lband_1757723806_lowband_catalog.fits"]
+    - ["/ABS/PATH/TO/ref_highband_catalog.fits", "/ABS/PATH/TO/Lband_1757723806_highband_catalog.fits"]
+    - ["/ABS/PATH/TO/ref_mfs_catalog.fits", "/ABS/PATH/TO/Lband_1757723806.SDPAllcorrected.MFS_catalog.fits"]
+
+  # For step 7a: positions analyses (one or more)
+  positions:
+    - xmatch_table: "/ABS/PATH/TO/refXother_lowband.fits"
+      ref_fits: "/ABS/PATH/TO/ref_image_lowband_pbcor.fits"
+      other_fits: "/ABS/PATH/TO/Lband_1757723806_lowband.fits"
+      per_scan_glob: "/ABS/PATH/TO/per_scan/refXscan_lowband_*.fits"
+      otherdatatag: "L1757723806_low"
+
+  # For step 7b: flux analysis inputs
+  flux:
+    ref_low_xmatch:  "/ABS/PATH/TO/ref_lowband_X_L1757723806_lowband.fits"
+    ref_high_xmatch: "/ABS/PATH/TO/ref_highband_X_L1757723806_highband.fits"
+    ref_mfs_xmatch:  "/ABS/PATH/TO/ref_mfs_X_L1757723806_mfs.fits"
+    scans_glob:      "/ABS/PATH/TO/ref_mfs_X_L1757723806_scan*.fits"
+    docx_name:       "flux_summary.docx"
