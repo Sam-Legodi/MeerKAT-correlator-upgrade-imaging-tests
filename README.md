@@ -81,8 +81,8 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ tclean_two_bands.py
 │  ├─ pybdsf_srcfind.py
 │  ├─ xmatch_pybdsf.py
-│  ├─ 2025_positions_analysis.py
-│  └─ 2025_Flux_analysis.ipynb
+│  ├─ positions_analysis.py
+│  └─ flux_analysis.ipynb
 ├─ configs/
 │  ├─ example_local.yaml
 │  └─ example_cluster.yaml
