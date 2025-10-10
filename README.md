@@ -423,6 +423,17 @@ casa --nologger --log2term -c scripts/tclean_two_bands.py <ms...>
 python scripts/pybdsf_srcfind.py --config config.yaml
 python scripts/xmatch_pybdsf.py --config config.yaml
 python scripts/2025_positions_analysis.py --xmatch-table ... --ref-fits ... --other-fits ...
+# Flux analysis (script version; no notebook needed)
+# Option A: via project CLI wrapper (recommended)
+python -m meerkat_corr_imaging.cli flux --config config.yaml
+
+# Option B: call the script directly
+python scripts/flux_analysis.py --config config.yaml
+
+# Outputs:
+# - Figures and tables under data/reports/flux/ (or your configured reports_dir)
+# - DOCX summary: data/reports/flux/flux_summary.docx
+
 ```
 
 This README is intended to be a single, clear starting point for you and your colleagues to rerun analyses or extend the workflow.
