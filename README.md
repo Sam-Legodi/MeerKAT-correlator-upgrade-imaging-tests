@@ -1,6 +1,6 @@
 # MeerKAT Correlator Upgrade — Imaging Tests
 
-Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT **reference** and **test** observations.
+Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT **reference** and **test** observations for correlator upgrade imaging verification.
 This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
 
 ---
