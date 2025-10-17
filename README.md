@@ -57,17 +57,43 @@ This repository standardizes the end-to-end process and makes it easy to share r
 ```
 MeerKAT-correlator-upgrade-imaging-tests/
 ├─ README.md
-├─ LICENSE
 ├─ .gitignore
-├─ .gitattributes               # Git LFS for large artifacts (FITS, MS, DOCX)
-├─ pyproject.toml               # Tooling config (black/ruff/mypy etc.)
-├─ .pre-commit-config.yaml
+├─ .gitattributes               # Git LFS pointers for large artifacts
+├─ configs/
+│  ├─ example_cluster.yaml
+│  └─ example_local.yaml
+├─ data/
+│  ├─ raw/                      # manual archive downloads
+│  ├─ interim/                  # intermediate calibration/QA outputs
+│  ├─ processed/                # final images, catalogues, xmatches
+│  └─ reports/                  # ready-to-share DOCX/PDF/PNG artefacts
+├─ examples/
+│  └─ tiny-demo/                # minimal runnable demo dataset
+├─ legacy_scripts/              # preserved historical utilities (read-only)
+│  ├─ corr_imanalysis.py
+│  ├─ image-analyser.py
+│  ├─ image-rotation.py
+│  ├─ image_analysis.py
+│  ├─ py3gokatsdpimager.py
+│  ├─ set_pyenv_settings.py
+│  ├─ srcfind.py
+│  ├─ srcfind.pyc
+│  └─ stats.py
+├─ scripts/                     # actively maintained pipeline entrypoints
+│  ├─ flux_analysis.py
+│  ├─ positions_analysis.py
+│  ├─ pybdsf_srcfind.py
+│  ├─ standalone_xxyy_solve.py
+│  ├─ tclean_two_bands.py
+│  ├─ vis_amp_analyze.py
+│  └─ xmatch_pybdsf.py
 ├─ src/
 │  └─ meerkat_corr_imaging/
 │     ├─ __init__.py
-│     ├─ cli.py                 # `mci` command-line interface (optional)
-│     ├─ config.py              # config loader/validator
+│     ├─ cli.py                 # optional CLI wrapper (`python -m meerkat_corr_imaging.cli`)
+│     ├─ config.py              # config loading/validation helpers
 │     └─ steps/
+<<<<<<< HEAD
 │        ├─ step1_archive_docs.py     # documentation helpers (no code execution)
 │        ├─ step2_vis_analysis.py     # wraps vis_amp_analyze.py
 │        ├─ step3_calibrate_image.py  # wraps CASA scripts
@@ -98,6 +124,16 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ test_paths.py
 │  └─ test_smoke_pipeline.py
 └─ legacy scripts/              # archived historical scripts (read-only)
+=======
+│        ├─ step1_archive_docs.py
+│        ├─ step2_vis_analysis.py
+│        ├─ step3_calibrate_image.py
+│        ├─ step5_srcfind.py
+│        ├─ step6_xmatch.py
+│        ├─ step7_flux.py
+│        └─ step7_positions.py
+└─ tests/                       # reserved for pytest suites (currently empty)
+>>>>>>> 2129540 (Include empty dirs with .gitkeep; update repo contents)
 ```
 
 > **Note:** Existing scripts continue to live under `scripts/`. New wrappers in `src/meerkat_corr_imaging/steps/` make the pipeline importable and testable.
@@ -148,9 +184,15 @@ git lfs install  # large images/catalogues are already listed in .gitattributes
 
 From the SARAO archive, request **corrected visibilities** by enabling `mvftoms` with `--applyall`. Download the following for both **reference** and **test** observations:
 
-* Corrected visibility **MeasurementSets**
-* **PB-corrected** continuum image(s)
-* **Multifrequency** image cubes
+* Corrected visibility **MeasurementSets**: 
+
+e.g: 
+```bash
+mvftoms.py 1757723806_sdp_l0.full.rdb -f --flags 'static, cam, data_lost, ingest_rfi, predicted_rfi, cal_rfi, postproc' --chanbin 4 --applycal 'all' -o 1757723806_sdp_l0.full.SDP_Allcorrected.ms
+```
+
+* **PB-corrected** continuum image(s) -- if comparing PB corrected images.
+* **Multifrequency** image cubes (the default SARAO archive/Obit versions)
 
 Document the request IDs, dates, and resulting file paths in `data/raw/README.md`.
 This step remains manual due to authentication and archive UX.
@@ -161,7 +203,7 @@ This step remains manual due to authentication and archive UX.
 
 ### 1) Install the project locally (once per machine)
 
-You are turning the repo into an importable Python package so wrappers and the CLI work.
+**If** you are turning the repo into an **importable Python package** so wrappers and the CLI work.
 
 ```bash
 # create and enter a clean virtualenv
@@ -189,12 +231,12 @@ Make a working copy of the example and fill in your paths (MS files, FITS images
 cp configs/example_local.yaml config.yaml
 ```
 
-Edit `config.yaml`:
+Edit `config.yaml` (see contents of `configs/example_local.yaml config.yaml`):
 
 * `reference.ms_paths` -> corrected MeasurementSets for your reference field
 * `tests[].ms_paths` -> corrected MeasurementSets for each test field
-* `reference.images` and `tests[].images` -> PB-corrected continuum, MFS, low, and high FITS files
-* `extra.xmatch_pairs`, `extra.positions`, `extra.flux` -> wire the files your wrappers need
+* `reference.images` and `tests[].images` -> PB-corrected continuum and/or MFS, low-band, and high-band FITS image files
+* `extra.xmatch_pairs`, `extra.positions`, `extra.flux` -> wire the files your wrappers need to perform cross-matching (cross-matching FITS catalogue pairs), and also cross-matched FITS catalogues for astrometry and flux analysis.
 * `paths.*` -> where outputs will be written (defaults live under `data/` and are auto-created)
 
 You can keep multiple configs (for example, one per dataset) and pass `--config path/to.yaml` to each command.
@@ -274,6 +316,7 @@ What happens:
 
 * Collects images from `reference.images` plus each test `images` (and any `extra.images_globs`).
 * Runs `scripts/pybdsf_srcfind.py --images ... [--isl ... --pix ... --freq-* ...]`.
+* if input images do not have frequency information in their headers, run this step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section.
 * PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
 
 Sanity check:
@@ -374,6 +417,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 ### 7) Common gotchas (and fixes)
 
 * `casa` not found -> export `CASA=/full/path/to/casa` or add it to your `PATH`; retry `mci cal`
+* if input images do not have frequency information in their headers, run the PYBDSF step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section. 
 * Permission errors writing under `data/` -> adjust `paths.*` to point at a writable location
 * Wrong FITS paths -> update `config.yaml`; wrappers only forward paths
 * No outputs appeared -> read the console; wrappers print the exact script command so you can rerun it by hand
@@ -498,7 +542,7 @@ If this work contributes to published research, please cite the repository. Add 
 
 ```
 @misc{MeerKAT_corr_upgrade_imaging_tests,
-  author       = {Legodi, Sam and collaborators},
+  author       = {Legodi, L. S and collaborators},
   title        = {MeerKAT Correlator Upgrade — Imaging Tests},
   year         = {2025},
   howpublished = {\url{https://github.com/Sam-Legodi/MeerKAT-correlator-upgrade-imaging-tests}}
