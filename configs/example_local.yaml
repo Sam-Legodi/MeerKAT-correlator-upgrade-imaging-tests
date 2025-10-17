@@ -8,31 +8,34 @@ paths:
   reports_dir: "data/reports"
   sky_xmatches_dir: "data/processed/Sky-CrossMatches"
 
-# Reference dataset
+# Reference dataset (e.g. CMC1 datasets)
 reference:
   name: "Lband_ref"
   ms_paths:
     - "/ABS/PATH/TO/ref_refcorr.ms"
-  images:
+  images: # PB-corrected and/or uncorrected versions
     - "/ABS/PATH/TO/ref_image_mfs_pbcor.fits"
     - "/ABS/PATH/TO/ref_image_lowband_pbcor.fits"
     - "/ABS/PATH/TO/ref_image_highband_pbcor.fits"
+    - "/ABS/PATH/TO/ref_image_mfs.fits"
+    - "/ABS/PATH/TO/ref_image_lowband.fits"
+    - "/ABS/PATH/TO/ref_image_highband.fits"
 
-# One or more tests
+# One or more tests (e.g. CMC2 datasets)
 tests:
   - name: "Lband_1757723806"
     ms_paths:
       - "/ABS/PATH/TO/Lband_1757723806.SDPAllcorrected.ms"
-    images:
+    images: # PB-corrected and/or uncorrected versions
       - "/ABS/PATH/TO/Lband_1757723806.SDPAllcorrected.MFS.fits"
       - "/ABS/PATH/TO/Lband_1757723806_lowband.fits"
       - "/ABS/PATH/TO/Lband_1757723806_highband.fits"
 
 # CASA settings
 casa:
-  scans: ""                 # e.g. "1,2,5" to limit per-scan imaging
-  lowband_hz: [8.98e8, 1.00e9]
-  highband_hz: [1.46e9, 1.70e9]
+  scans: ""                     # e.g. "1,2,5" to constrain per-scan imaging
+  lowband_hz: [8.98e8, 1.00e9]  # L-band lowband frequency range (otherwise lower quartile of band)
+  highband_hz: [1.46e9, 1.70e9] # L-band highband frequency range (otherwise upper quartile of band)
 
 # PyBDSF defaults
 pybdsf:
@@ -55,7 +58,7 @@ extra:
   # For step 3: only run standalone calibration if explicitly requested
   force_calibrate: false
 
-  # For step 5: you can add additional globs to process
+  # For step 5: you can add additional globs to process (e.g. per-scan mfs or subband images)
   images_globs: []
 
   # For step 6: list pairs to cross-match (output auto-placed if omitted)
@@ -69,8 +72,8 @@ extra:
     - xmatch_table: "/ABS/PATH/TO/refXother_lowband.fits"
       ref_fits: "/ABS/PATH/TO/ref_image_lowband_pbcor.fits"
       other_fits: "/ABS/PATH/TO/Lband_1757723806_lowband.fits"
-      per_scan_glob: "/ABS/PATH/TO/per_scan/refXscan_lowband_*.fits"
-      otherdatatag: "L1757723806_low"
+      per_scan_glob: "/ABS/PATH/TO/per_scan/refXscan_lowband_*.fits" # (optional) per-scan mfs xmatches also work here
+      otherdatatag: "L1757723806_low" # human readable reference for test observation used in plots/reports
 
   # For step 7b: flux analysis inputs
   flux:

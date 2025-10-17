@@ -18,3 +18,19 @@ data/reports/
 *.fits
 *.log
 .DS_Store
+
+# macOS junk
+.DS_Store
+
+# ignore all data contents, but keep directory structure via .gitkeep
+data/**
+!data/**/.gitkeep
+
+
+# macOS junk
+.DS_Store
+
+# ignore all data contents, but keep directory structure via .gitkeep
+data/**
+!data/**/.gitkeep
+
