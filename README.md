@@ -1,5 +1,6 @@
 # MeerKAT Correlator Upgrade — Imaging Tests
 
+Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT reference and test observations for correlator upgrade imaging verification. This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
 Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT **reference** and **test** observations for correlator upgrade imaging verification.
 This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
 
@@ -79,21 +80,12 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ srcfind.py
 │  ├─ srcfind.pyc
 │  └─ stats.py
-├─ scripts/                     # actively maintained pipeline entrypoints
-│  ├─ flux_analysis.py
-│  ├─ positions_analysis.py
-│  ├─ pybdsf_srcfind.py
-│  ├─ standalone_xxyy_solve.py
-│  ├─ tclean_two_bands.py
-│  ├─ vis_amp_analyze.py
-│  └─ xmatch_pybdsf.py
 ├─ src/
 │  └─ meerkat_corr_imaging/
 │     ├─ __init__.py
 │     ├─ cli.py                 # optional CLI wrapper (`python -m meerkat_corr_imaging.cli`)
 │     ├─ config.py              # config loading/validation helpers
 │     └─ steps/
-<<<<<<< HEAD
 │        ├─ step1_archive_docs.py     # documentation helpers (no code execution)
 │        ├─ step2_vis_analysis.py     # wraps vis_amp_analyze.py
 │        ├─ step3_calibrate_image.py  # wraps CASA scripts
@@ -109,31 +101,10 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ xmatch_pybdsf.py
 │  ├─ positions_analysis.py
 │  └─ flux_analysis.ipynb
-├─ configs/
-│  ├─ example_local.yaml
-│  └─ example_cluster.yaml
-├─ data/
-│  ├─ raw/                      # archive downloads (manual)
-│  ├─ interim/                  # calibration outputs, QA CSVs
-│  ├─ processed/                # images, catalogues, xmatches
-│  └─ reports/                  # DOCX summaries, PNG/PDF figures
-├─ examples/
-│  └─ tiny-demo/                # minimal runnable demo (small files)
 ├─ tests/
 │  ├─ test_config.py
 │  ├─ test_paths.py
 │  └─ test_smoke_pipeline.py
-└─ legacy scripts/              # archived historical scripts (read-only)
-=======
-│        ├─ step1_archive_docs.py
-│        ├─ step2_vis_analysis.py
-│        ├─ step3_calibrate_image.py
-│        ├─ step5_srcfind.py
-│        ├─ step6_xmatch.py
-│        ├─ step7_flux.py
-│        └─ step7_positions.py
-└─ tests/                       # reserved for pytest suites (currently empty)
->>>>>>> 2129540 (Include empty dirs with .gitkeep; update repo contents)
 ```
 
 > **Note:** Existing scripts continue to live under `scripts/`. New wrappers in `src/meerkat_corr_imaging/steps/` make the pipeline importable and testable.
