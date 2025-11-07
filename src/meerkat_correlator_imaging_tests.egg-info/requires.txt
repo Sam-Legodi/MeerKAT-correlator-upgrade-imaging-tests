@@ -1,0 +1,15 @@
+astropy>=5.3
+numpy>=1.24
+pandas>=1.5
+matplotlib>=3.7
+scipy>=1.10
+python-docx>=0.8
+PyYAML>=6.0
+
+[dev]
+pytest>=7.4
+pytest-cov>=4.1
+pre-commit>=3.6
+
+[radio]
+python-casacore>=3.5

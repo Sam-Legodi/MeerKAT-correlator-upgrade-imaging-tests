@@ -41,7 +41,7 @@ res = posan.analyze_ref_vs_other_with_optional_scans(
 print(res["outdir"], res["report_docx"])
 """
 
-import os, sys, time, argparse, csv, glob
+import os, sys, time, argparse, csv, glob, builtins
 from astropy.table import Table, Column
 from astropy.io import fits
 from astropy.wcs import WCS as w
@@ -58,6 +58,8 @@ import numpy as np
 from numpy import pi
 from docx import Document
 from docx.shared import Inches
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from matplotlib.patches import Ellipse  # NEW: for enclosing ellipses
 
 
@@ -184,6 +186,30 @@ def _docx_add_caption(doc, text):
     return
 
 
+def _set_table_borders(table, width_pt=1.0, color="000000"):
+    """Ensure table borders are visible with the requested width."""
+    size = builtins.max(int(round(width_pt * 8)), 1)  # Word expects 1/8 pt units
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl.append(tblPr)
+    borders = tblPr.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tblPr.append(borders)
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        tag = qn(f"w:{edge}")
+        element = borders.find(tag)
+        if element is None:
+            element = OxmlElement(f"w:{edge}")
+            borders.append(element)
+        element.set(qn("w:val"), "single")
+        element.set(qn("w:sz"), str(size))
+        element.set(qn("w:space"), "0")
+        element.set(qn("w:color"), color)
+
+
 def _save_fig(figpath):
     plt.tight_layout()
     plt.savefig(figpath, dpi=150, bbox_inches='tight')
@@ -281,6 +307,7 @@ def _docx_add_table(doc, rows):
         row_cells = tbl.add_row().cells
         for i, val in enumerate(r):
             row_cells[i].text = str(val)
+    _set_table_borders(tbl, width_pt=1.0)
 
 
 def _legend_outside(ax):
@@ -456,7 +483,7 @@ def pos_varCMC1xCMC2(
         outdir = _ensure_dir(os.path.dirname(other_fits_path)+"/crossmatched-positions")
     
     base_other_full = os.path.basename(xmatch_table_path).replace(".fits", "")
-    report_docx = os.path.join(outdir, f"{base_ref}_x_{base_other_full}.docx")
+    report_docx = os.path.join(outdir, f"{base_ref}_x_{base_other_full}_astrometry.docx")
 
     fig1 = os.path.join(outdir, f"DRA-vs-phi-{base_ref}x{base_other}.png")
     fig2 = os.path.join(outdir, f"DDEC-vs-phi-{base_ref}x{base_other}.png")

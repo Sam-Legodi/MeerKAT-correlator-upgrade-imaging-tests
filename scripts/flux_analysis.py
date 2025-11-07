@@ -24,6 +24,8 @@ import numpy as np  # noqa: E402
 from astropy.table import Table  # noqa: E402
 from docx import Document  # noqa: E402
 from docx.shared import Inches  # noqa: E402
+from docx.oxml import OxmlElement  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
 
 
 # -------- shared helpers (safe column read + docx + figs) --------
@@ -92,6 +94,32 @@ def _ratio(test: np.ndarray, ref: np.ndarray) -> np.ndarray:
     return test / denom
 
 
+def _axis_inlier_mask(values: np.ndarray, max_z: float = 4.0) -> np.ndarray:
+    """
+    Return True for samples within `max_z` robust-sigma of the median.
+    Helps cull extreme x/y points before regression so horizontal/vertical
+    outliers cannot sneak into the fit.
+    """
+    arr = np.asarray(values, dtype=float).ravel()
+    mask = np.zeros_like(arr, dtype=bool)
+    if arr.size == 0:
+        return mask
+    finite = np.isfinite(arr)
+    if not np.any(finite):
+        return mask
+    good = arr[finite]
+    median = np.nanmedian(good)
+    mad = 1.4826 * np.nanmedian(np.abs(good - median))
+    if not np.isfinite(mad) or mad <= 1.0e-9:
+        mad = np.nanstd(good)
+    if not np.isfinite(mad) or mad <= 1.0e-9:
+        mask[finite] = True
+        return mask
+    z = np.abs(good - median) / mad
+    mask[finite] = z <= max_z
+    return mask
+
+
 def _fmt_stat(arr: np.ndarray, func, fmt: str = "{:.6g}", default: str = "nan") -> str:
     arr = np.asarray(arr, dtype=float)
     arr = arr[np.isfinite(arr)]
@@ -145,6 +173,29 @@ def _summary_rows(
 
     return rows
 
+def _set_table_borders(table, width_pt: float = 1.0, color: str = "000000") -> None:
+    """Ensure DOCX table borders are visible with the requested width."""
+    size = max(int(round(width_pt * 8)), 1)  # Word units: 1/8th points
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement("w:tblPr")
+        tbl.append(tblPr)
+    borders = tblPr.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tblPr.append(borders)
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        tag = qn(f"w:{edge}")
+        element = borders.find(tag)
+        if element is None:
+            element = OxmlElement(f"w:{edge}")
+            borders.append(element)
+        element.set(qn("w:val"), "single")
+        element.set(qn("w:sz"), str(size))
+        element.set(qn("w:space"), "0")
+        element.set(qn("w:color"), color)
+
 
 def _add_table(doc: Document, rows: List[List[str]], caption_text: str) -> None:
     table = doc.add_table(rows=1, cols=len(rows[0]))
@@ -155,6 +206,7 @@ def _add_table(doc: Document, rows: List[List[str]], caption_text: str) -> None:
         row = table.add_row().cells
         for j, value in enumerate(row_values):
             row[j].text = str(value)
+    _set_table_borders(table, width_pt=1.0)
     _docx_add_caption(doc, caption_text)
 
 
@@ -307,7 +359,7 @@ def _plot_flux_comparison(
     out_path: str,
 ) -> Dict[str, float]:
     """Scatter plot with robust linear fit, returning fit metadata."""
-    plt.figure(figsize=(6.2, 5.5))
+    plt.figure(figsize=(6.6, 5.5))
     plt.title(title)
 
     ref_arr = np.asarray(ref_flux, dtype=float).ravel()
@@ -339,11 +391,46 @@ def _plot_flux_comparison(
     inlier_mask = np.zeros_like(ref_valid, dtype=bool)
 
     if ref_valid.size:
-        slope, intercept, slope_err, intercept_err, inlier_mask = _robust_linfit(
-            ref_valid, test_valid, yerr=yerr_valid
-        )
+        # Axis-based sanity check: reject extreme x or y values before linear fitting.
+        axis_mask = _axis_inlier_mask(ref_valid) & _axis_inlier_mask(test_valid)
+        if np.count_nonzero(axis_mask) >= 2:
+            ref_axis = ref_valid[axis_mask]
+            test_axis = test_valid[axis_mask]
+            yerr_axis = None
+            if yerr_valid is not None:
+                yerr_axis = yerr_valid[axis_mask]
+            # Residual-based screening only runs on axis-filtered points.
+            _, _, _, _, residual_mask = _robust_linfit(ref_axis, test_axis, yerr=yerr_axis)
+            inlier_mask = np.zeros_like(ref_valid, dtype=bool)
+            inlier_mask[axis_mask] = residual_mask
+        else:
+            axis_mask = np.zeros_like(ref_valid, dtype=bool)
+            inlier_mask = np.zeros_like(ref_valid, dtype=bool)
 
+        if np.count_nonzero(inlier_mask) >= 2:
+            ref_in = ref_valid[inlier_mask]
+            test_in = test_valid[inlier_mask]
+            yerr_in = None
+            if yerr_valid is not None:
+                yerr_in = yerr_valid[inlier_mask]
+            # Second pass: fit line using only the inliers so outliers never influence the slope.
+            slope, intercept, slope_err, intercept_err, _ = _robust_linfit(
+                ref_in, test_in, yerr=yerr_in
+            )
+        else:
+            slope = np.nan
+            intercept = np.nan
+            slope_err = np.nan
+            intercept_err = np.nan
     outlier_mask = ~inlier_mask
+    if ref_valid.size:
+        vals = np.concatenate([np.abs(ref_valid), np.abs(test_valid)])
+        lim = 1.05 * float(np.nanmax(vals)) if vals.size else 1.0
+        if not np.isfinite(lim) or lim <= 0.0:
+            lim = 1.0
+    else:
+        lim = 1.0
+
     if ref_valid.size:
         if np.any(inlier_mask):
             plt.errorbar(
@@ -371,13 +458,7 @@ def _plot_flux_comparison(
                 label="Data (outliers)",
             )
 
-    if ref_valid.size:
-        vals = np.concatenate([np.abs(ref_valid), np.abs(test_valid)])
-        lim = 1.05 * float(np.nanmax(vals)) if vals.size else 1.0
-        if not np.isfinite(lim) or lim <= 0.0:
-            lim = 1.0
-    else:
-        lim = 1.0
+    plt.plot([0.0, lim], [0.0, lim], "k--", lw=1, label="y = x")
 
     if np.isfinite(slope) and np.isfinite(intercept):
         x_vals = np.array([0.0, lim])
@@ -388,14 +469,13 @@ def _plot_flux_comparison(
                 lim = 1.05 * builtins.max(lim, float(np.nanmax(np.abs(y_finite))))
                 x_vals = np.array([0.0, lim])
                 y_vals = slope * x_vals + intercept
-        label = (
-            f"Fit: y=({slope:.2f}+/-{slope_err:.2f})x + ({intercept:.2g}+/-{intercept_err:.2g})"
-            if np.isfinite(slope_err) and np.isfinite(intercept_err)
-            else f"Fit: y={slope:.2f}x + {intercept:.2g}"
-        )
+        if np.isfinite(slope_err) and np.isfinite(intercept_err):
+            label = (
+                f"Fit: y=({slope:.2f}+/-{slope_err:.2f})x + ({intercept:.2g}+/-{intercept_err:.2g})"
+            )
+        else:
+            label = f"Fit: y={slope:.2f}x + {intercept:.2g}"
         plt.plot(x_vals, y_vals, color="C1", lw=1.4, label=label)
-
-    plt.plot([0.0, lim], [0.0, lim], "k--", lw=1, label="y = x")
 
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
@@ -403,6 +483,7 @@ def _plot_flux_comparison(
     plt.legend(loc="best")
     plt.xlim(0.0, lim)
     plt.ylim(0.0, lim)
+    plt.tight_layout()
     _save_fig(out_path)
 
     return {
@@ -428,7 +509,7 @@ def compare_fluxes_across_band_and_scans(
     """
     parent = os.path.dirname(os.path.abspath(ref_low_xmatch))
     outdir = _ensure_dir(os.path.join(parent, "crossmatched-fluxes"))
-    print(f"Output directory: {outdir}")
+    print(f"\n**** Output directory: {outdir}")
 
     t_low = Table.read(ref_low_xmatch)
     t_high = Table.read(ref_high_xmatch)
@@ -712,15 +793,15 @@ def compare_fluxes_across_band_and_scans(
     peak_figures = [
         (
             fig_peak_low,
-            "Reference vs Lowband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Reference vs Lowband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_high,
-            "Reference vs Highband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Reference vs Highband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_mfs,
-            "Reference vs Full-band (MFS) peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Reference vs Full-band (MFS) peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_hist,
@@ -863,12 +944,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         docx_name=args.docx_name,
     )
 
-    print("DOCX report :", result["report_docx"])
-    print("\n Peak flux plots  :", ", ".join(result["plots_peak"]))
+    print("**** DOCX report :", result["report_docx"])
+    print("\n**** Peak flux plots  :\n", ",\n ".join(result["plots_peak"]))
     if result["plots_total"]:
-        print("\n Total/integrated flux plots :", ", ".join(result["plots_total"]))
+        print("\n**** Total/integrated flux plots :\n", ",\n ".join(result["plots_total"]))
     if result["scan_summary"]:
-        print("\n Scan flux summary table rows:", len(result["scan_summary"]) - 1)
+        print("\n**** Scan flux summary table rows:", len(result["scan_summary"]) - 1)
     return 0
 
 

@@ -1,3 +1,25 @@
+Metadata-Version: 2.4
+Name: meerkat-correlator-imaging-tests
+Version: 0.1.0
+Summary: Workflows and CLI wrappers for MeerKAT correlator upgrade imaging verification.
+Author: SARAO Imaging Team
+License: Proprietary
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: astropy>=5.3
+Requires-Dist: numpy>=1.24
+Requires-Dist: pandas>=1.5
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: scipy>=1.10
+Requires-Dist: python-docx>=0.8
+Requires-Dist: PyYAML>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-cov>=4.1; extra == "dev"
+Requires-Dist: pre-commit>=3.6; extra == "dev"
+Provides-Extra: radio
+Requires-Dist: python-casacore>=3.5; extra == "radio"
+
 # MeerKAT Correlator Upgrade — Imaging Tests
 
 Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT reference and test observations for correlator upgrade imaging verification. This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
@@ -213,7 +235,7 @@ Make a working copy of the example and fill in your paths (MS files, FITS images
 cp configs/example_local.yaml config.yaml
 ```
 
-Edit `config.yaml` (see contents of `configs/example*_local.yaml config.yaml`):
+Edit `config.yaml` (see contents of `configs/example_local.yaml config.yaml`):
 
 * `reference.ms_paths` -> corrected MeasurementSets for your reference field
 * `tests[].ms_paths` -> corrected MeasurementSets for each test field
