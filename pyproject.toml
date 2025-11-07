@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meerkat-correlator-imaging-tests"
+version = "0.1.0"
+description = "Workflows and CLI wrappers for MeerKAT correlator upgrade imaging verification."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary"}
+authors = [
+  {name = "SARAO Imaging Team"}
+]
+dependencies = [
+  "astropy>=5.3",
+  "numpy>=1.24",
+  "pandas>=1.5",
+  "matplotlib>=3.7",
+  "scipy>=1.10",
+  "python-docx>=0.8",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "pre-commit>=3.6",
+]
+radio = [
+  "python-casacore>=3.5",
+]
+
+[project.scripts]
+meerkat-ci = "meerkat_corr_imaging.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
