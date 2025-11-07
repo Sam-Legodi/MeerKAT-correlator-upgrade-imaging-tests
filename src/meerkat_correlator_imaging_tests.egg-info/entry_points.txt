@@ -1,0 +1,2 @@
+[console_scripts]
+meerkat-ci = meerkat_corr_imaging.cli:main

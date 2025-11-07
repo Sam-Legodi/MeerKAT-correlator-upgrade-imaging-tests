@@ -1,6 +1,6 @@
 project_name: "MeerKAT-correlator-upgrade-imaging-tests"
 
-# Where outputs go (created if missing)
+# Where outputs go inside repo directory (created if missing)
 paths:
   raw_dir: "data/raw"
   interim_dir: "data/interim"
@@ -8,7 +8,7 @@ paths:
   reports_dir: "data/reports"
   sky_xmatches_dir: "data/processed/Sky-CrossMatches"
 
-# Reference dataset (e.g. CMC1 datasets)
+# Reference dataset (e.g. CMC1 datasets -- delete/leave out inputs that won't be used)
 reference:
   name: "Lband_ref"
   ms_paths:
