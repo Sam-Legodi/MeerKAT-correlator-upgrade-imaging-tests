@@ -10,8 +10,33 @@ from .steps import (
     step7_flux,
 )
 
+
+def _normalize_cli_args(argv):
+    """
+    Allow `--config ...` to appear before or after the subcommand by
+    rewriting the argv list so argparse always sees it first.
+    """
+    cfg_tokens = []
+    rest = []
+    skip_next = False
+    for idx, token in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--config":
+            if idx + 1 >= len(argv):
+                raise SystemExit("error: --config requires a value")
+            cfg_tokens = ["--config", argv[idx + 1]]
+            skip_next = True
+        elif token.startswith("--config="):
+            cfg_tokens = [token]
+        else:
+            rest.append(token)
+    return cfg_tokens + rest
+
 def main(argv=None):
     argv = argv or sys.argv[1:]
+    norm_argv = _normalize_cli_args(list(argv))
     p = argparse.ArgumentParser(prog="mci", description="MeerKAT correlator imaging orchestration")
     p.add_argument("--config", required=True, help="Path to master YAML config")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -24,7 +49,7 @@ def main(argv=None):
     sub.add_parser("flux",help="Run flux analysis (step 7b)")
     sub.add_parser("all", help="Run vis -> cal -> src -> xm -> pos -> flux")
 
-    args = p.parse_args(argv)
+    args = p.parse_args(norm_argv)
     cfg = load_config(args.config)
 
     if args.cmd == "vis":

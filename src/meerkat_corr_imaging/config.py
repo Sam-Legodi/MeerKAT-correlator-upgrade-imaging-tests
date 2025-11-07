@@ -63,6 +63,10 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         reports_dir=d.get("reports_dir", "data/reports"),
         sky_xmatches_dir=d.get("sky_xmatches_dir", "data/processed/Sky-CrossMatches"),
     )
+    top_level_extra = {k: v for k, v in d.items() if k not in {
+        "project_name","out_root","paths","raw_dir","interim_dir","processed_dir","reports_dir",
+        "sky_xmatches_dir","reference","tests","casa","pybdsf","xmatch","extra"}}
+    merged_extra = {**(d.get("extra") or {}), **top_level_extra}
     cfg = Config(
         project_name=d["project_name"],
         out_root=d.get("out_root", "data"),
@@ -72,9 +76,7 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         casa=CasaCfg(**d.get("casa", {})),
         pybdsf=PyBDSFCfg(**d.get("pybdsf", {})),
         xmatch=XMatchCfg(**d.get("xmatch", {})),
-        extra={k: v for k, v in d.items() if k not in {
-            "project_name","out_root","paths","raw_dir","interim_dir","processed_dir","reports_dir",
-            "sky_xmatches_dir","reference","tests","casa","pybdsf","xmatch"}}
+        extra=merged_extra,
     )
     return cfg
 
