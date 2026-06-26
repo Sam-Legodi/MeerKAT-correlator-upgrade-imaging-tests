@@ -128,6 +128,9 @@ MeerKAT-correlator-upgrade-imaging-tests/
 Create a dedicated virtual environment and install this repository in editable mode so CLI wrappers pick up your edits immediately.
 
 ```bash
+# Get the repo
+# git clone https://github.com/Sam-Legodi/MeerKAT-correlator-upgrade-imaging-tests.git
+# cd MeerKAT-correlator-upgrade-imaging-tests
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
