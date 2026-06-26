@@ -169,11 +169,14 @@ With Conda (recommended on macOS and Linux):
 conda install -n meerkat-ci -c conda-forge python-casacore pybdsf
 ```
 
-On Linux systems with casacore already available you can alternatively use pip:
+On Linux systems with casacore already available, you can alternatively use pip:
 
 ```bash
 pip install -e ".[radio]"            # installs python-casacore from PyPI
-pip install git+https://github.com/lofar-astron/PyBDSF.git@master
+
+# Currently, BDSF requires numpy<2
+# python -m pip install --force-reinstall "numpy<2"
+# python -m pip install --no-cache-dir --no-build-isolation --force-reinstall git+https://github.com/lofar-astron/PyBDSF.git@master
 ```
 
 If you maintain your own builds, ensure both packages are on the environment `PYTHONPATH` before running `python -m meerkat_corr_imaging.cli ...`.
