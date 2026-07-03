@@ -175,16 +175,12 @@ On Linux systems with casacore already available, you can alternatively use pip:
 pip install -e ".[radio]"            # installs python-casacore from PyPI
 ```
 
-Currently, BDSF requires numpy<2
+Older BDSF requires numpy<2
 If this fails: 
 ```bash
-pip install git+https://github.com/lofar-astron/PyBDSF.git@master
+python -m pip install bdsf    
 ```
-Then do:
-```bash
-python -m pip install --force-reinstall "numpy<2"
-python -m pip install --no-cache-dir --no-build-isolation --force-reinstall git+https://github.com/lofar-astron/PyBDSF.git@master
-```
+Then do refer to: https://github.com/lofar-astron/PyBDSF.
 
 If you maintain your own builds, ensure both packages are on the environment `PYTHONPATH` before running `python -m meerkat_corr_imaging.cli ...`.
 
