@@ -88,9 +88,65 @@ def linfit(xInput, xDataList, yDataList):
     yPredict = y_predict(xInput)
     return yPredict
 
+def fit_flux_model(nu, flux_jy, nu0, order=3):
+    """Convert log10(S) samples to CASA manual fluxdensity/spix form."""
+    lnunu0 = np.log10(nu / nu0)
+    log_flux = np.log10(flux_jy)
+    degree = min(order, max(0, len(np.unique(lnunu0)) - 1))
+    poly = np.polyfit(lnunu0, log_flux, degree)
+    coeffs = np.zeros(order + 1)
+    coeffs[:degree + 1] = poly[::-1]
+    fluxdensity = 10 ** coeffs[0]
+    return [nu0, fluxdensity] + coeffs[1:].tolist()
+
+def _selected_spw_ids(nspw, spw_selection):
+    if not spw_selection:
+        return list(range(nspw))
+
+    spw_ids = []
+    for item in spw_selection.split(","):
+        spw_spec = item.split(":", 1)[0].strip()
+        if not spw_spec:
+            continue
+        if "~" in spw_spec:
+            start, stop = [int(value) for value in spw_spec.split("~", 1)]
+            spw_ids.extend(range(start, stop + 1))
+        else:
+            spw_ids.append(int(spw_spec))
+
+    return [spw_id for spw_id in spw_ids if 0 <= spw_id < nspw]
+
+def j0408_flux_model_from_msmd(msmd_tool, spw_selection=""):
+    # 0408-65 epoch 2016: a=-0.9790, b=3.3662, c=-1.1216, d=0.0861
+    selected_spws = _selected_spw_ids(msmd_tool.nspw(), spw_selection)
+    freqs = [
+        np.asarray(msmd_tool.chanfreqs(spw_id, unit="Hz"), dtype=float).ravel()
+        for spw_id in selected_spws
+    ]
+    if not freqs:
+        raise ValueError("No spectral windows selected from SPECTRAL_WINDOW.")
+
+    freq_hz = np.concatenate(freqs)
+    freq_hz = freq_hz[np.isfinite(freq_hz)]
+    if freq_hz.size == 0:
+        raise ValueError("No finite channel frequencies found in SPECTRAL_WINDOW.")
+    freq_hz = np.unique(freq_hz)
+
+    mhz = 1e6
+    a, b, c, d = -0.9790, 3.3662, -1.1216, 0.0861
+    flux_jy = 10 ** (
+        a
+        + b * np.log10(freq_hz / mhz)
+        + c * np.log10(freq_hz / mhz) ** 2
+        + d * np.log10(freq_hz / mhz) ** 3
+    )
+    reffreq = float(np.nanmedian(freq_hz))
+    return fit_flux_model(freq_hz, flux_jy, reffreq, order=3)
+
 def do_setjy(visname, spw, fields, standard, dopol=False, createmms=True):
     """
-    Exact implementation from your setjy.py.
+    Adapted from implementation in `processMeerKAT` pipeline,
+    save for J0408-6545 flux model which is set following SARAO help page recommendations.
     """
     # Use global CASA task 'delmod'
     delmod(vis=visname)  # clear existing model (prevents exit code 1)
@@ -116,16 +172,17 @@ def do_setjy(visname, spw, fields, standard, dopol=False, createmms=True):
             setjyname = fields.fluxfield.split(",")[0]
 
     if do_manual:
-        smodel = [17.066, 0.0, 0.0, 0.0]
-        spix = [-1.179]
-        reffreq = "1284MHz"
+        reffreq_hz, fluxdensity, spix0, spix1, spix2 = j0408_flux_model_from_msmd(msmd, spw)
+        smodel = [float(fluxdensity), 0.0, 0.0, 0.0]
+        spix = [float(spix0), float(spix1), float(spix2), 0.0]
+        reffreq = "%f Hz" % reffreq_hz
 
-        logger.info("Using manual flux density scale - ")
+        logger.info("Using manual J0408-6545 flux density scale from MS frequencies - ")
         logger.info("Flux model: %s ", smodel)
         logger.info("Spix: %s", spix)
         logger.info("Ref freq %s", reffreq)
 
-        setjy(vis=visname, field=setjyname, scalebychan=True, standard="manual",
+        setjy(vis=visname, field=setjyname, spw=spw, scalebychan=True, standard="manual",
               fluxdensity=smodel, spix=spix, reffreq=reffreq, ismms=ismms)
     else:
         setjy(vis=visname, field=setjyname, spw=spw, scalebychan=True,
