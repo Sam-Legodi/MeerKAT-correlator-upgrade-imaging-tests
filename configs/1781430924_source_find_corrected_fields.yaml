@@ -1,0 +1,58 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+paths:
+  raw_dir: "/home/slegodi/corr_upgrade_tests/2026/data"
+  interim_dir: "/home/slegodi/corr_upgrade_tests/2026/outputs/interim"
+  processed_dir: "/home/slegodi/corr_upgrade_tests/2026/outputs/processed"
+  reports_dir: "/home/slegodi/corr_upgrade_tests/2026/outputs/reports"
+  sky_xmatches_dir: "/home/slegodi/corr_upgrade_tests/2026/outputs/processed/Sky-CrossMatches"
+
+reference:
+  name: "none"
+  ms_paths: []
+  images: []
+
+tests:
+  - name: "1781430924_corrected_fields"
+    ms_paths: []
+    images:
+      - "/home/slegodi/corr_upgrade_tests/2026/data/images/1781430924_sdp_l0.full_lowband.fits"
+      - "/home/slegodi/corr_upgrade_tests/2026/data/images/1781430924_sdp_l0.full_highband.fits"
+      - "/home/slegodi/corr_upgrade_tests/2026/data/images/1781430924_sdp_l0.full_msf_scan*.fits"
+
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: true
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference: {name: "none", cuboid: null, low_image: null, high_image: null}
+  tests:
+    - name: "1781430924_corrected_fields"
+      cuboid: null
+      low_image: "/home/slegodi/corr_upgrade_tests/2026/data/images/1781430924_sdp_l0.full_lowband.fits"
+      high_image: "/home/slegodi/corr_upgrade_tests/2026/data/images/1781430924_sdp_l0.full_highband.fits"
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  freq_mhz: null
+  base_prefix: ""
+
+xmatch:
+  max_sep_arcsec: 1.0
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs: []
+  positions: []
+  flux: {}

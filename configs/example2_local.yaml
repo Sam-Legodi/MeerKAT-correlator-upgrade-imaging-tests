@@ -34,6 +34,23 @@ casa:
   lowband_hz: [8.98e8, 1.00e9]  # L-band lowband frequency range (otherwise lower quartile of band)
   highband_hz: [1.46e9, 1.70e9] # L-band highband frequency range (otherwise upper quartile of band)
 
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference:
+    name: "Lband_ref"
+    cuboid: null
+    low_image: "/Users/samuel/SARAO/imagin_varification/2025/data/images/1757723806_continuum_image_J2147-8132_IClean.lowband.fits"
+    high_image: "/Users/samuel/SARAO/imagin_varification/2025/data/images/1757723806_continuum_image_J2147-8132_IClean.hghband.fits"
+  tests:
+    - name: "Lband_1757723806"
+      cuboid: null
+      low_image: "/Users/samuel/SARAO/imagin_varification/2025/data/images/1757723806_continuum_image_J2147-8132_IClean.lowband.fits"
+      high_image: "/Users/samuel/SARAO/imagin_varification/2025/data/images/1757723806_continuum_image_J2147-8132_IClean.hghband.fits"
+
 # PyBDSF defaults
 pybdsf:
   thresh_isl: 3.5

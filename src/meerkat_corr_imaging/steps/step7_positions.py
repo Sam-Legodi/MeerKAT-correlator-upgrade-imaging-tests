@@ -1,36 +1,54 @@
 from __future__ import annotations
-import subprocess, shlex
-from pathlib import Path
-from typing import Iterable, Dict, Any
+import sys
+from typing import Iterable
+from ..audit import (
+    raise_for_failures,
+    record_failure,
+    record_skip,
+    register_inputs,
+    run_logged_command,
+)
 from ..config import Config
 
-def _run(cmd: Iterable[str]):
-    print("[POS] ->", " ".join(shlex.quote(c) for c in cmd))
-    subprocess.run(list(cmd), check=True)
+def _run(cmd: Iterable[str], *, inputs: Iterable[str] = ()):
+    return run_logged_command(cmd, prefix="[POS]", inputs=inputs)
 
 def run(cfg: Config):
     """
-    Calls scripts/positions_analysis.py for each analysis entry specified in config.extra.positions.
+    Calls the packaged position analysis for each configured entry.
     Each entry must supply:
       xmatch_table, ref_fits, other_fits
     Optional: per_scan_glob, otherdatatag
     """
-    script = Path("scripts/positions_analysis.py")
-    if not script.exists():
-        raise FileNotFoundError(f"Missing {script}")
-
     analyses = cfg.extra.get("positions", [])
     if not analyses:
-        print("[POS] No positions analyses defined; skipping.")
+        message = "No positions analyses defined; skipping."
+        print(f"[POS] {message}")
+        record_skip(message)
         return
 
-    for a in analyses:
-        cmd = ["python", str(script),
-               "--xmatch-table", a["xmatch_table"],
-               "--ref-fits", a["ref_fits"],
-               "--other-fits", a["other_fits"]]
-        if a.get("per_scan_glob"):
-            cmd += ["--per-scan-glob", a["per_scan_glob"]]
-        if a.get("otherdatatag"):
-            cmd += ["--otherdatatag", a["otherdatatag"]]
-        _run(cmd)
+    labels = [
+        f"{analysis.get('xmatch_table', '<missing xmatch_table>')} + "
+        f"{analysis.get('ref_fits', '<missing ref_fits>')} + "
+        f"{analysis.get('other_fits', '<missing other_fits>')}"
+        for analysis in analyses
+    ]
+    register_inputs(labels)
+    failures: list[BaseException] = []
+
+    for label, analysis in zip(labels, analyses):
+        try:
+            cmd = [sys.executable, "-m", "meerkat_corr_imaging.positions_analysis",
+                   "--xmatch-table", analysis["xmatch_table"],
+                   "--ref-fits", analysis["ref_fits"],
+                   "--other-fits", analysis["other_fits"]]
+            if analysis.get("per_scan_glob"):
+                cmd += ["--per-scan-glob", analysis["per_scan_glob"]]
+            if analysis.get("otherdatatag"):
+                cmd += ["--otherdatatag", analysis["otherdatatag"]]
+            _run(cmd, inputs=[label])
+        except Exception as exc:
+            record_failure(label, exc)
+            failures.append(exc)
+
+    raise_for_failures("position analysis", failures)
