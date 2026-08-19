@@ -1,0 +1,95 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Wide-L delivered-image comparisons. CMC1 1786962370 is an exact 4kL reference
+#  for 1785059546 and the best available same-frequency reference for the 32kL, 8kL and 1kL observations.
+#  No post-image 1k channel averaging occurs.
+paths:
+  raw_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/raw"
+  interim_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/interim"
+  processed_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed"
+  reports_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/reports"
+  sky_xmatches_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed/Sky-CrossMatches"
+
+reference:
+  name: "CMC1_1786962370_4kL"
+  ms_paths: []
+  images:
+    - &ref_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1786962370_cmc1_4kL/images/1786962370_continuum_image_J2147-8132_IClean_PB.fits"
+  cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1786962370_cmc1_4kL/images/1786962370_continuum_image_J2147-8132_IClean.fits"
+
+tests:
+  - name: "CMC2_1784437450_32kL"
+    ms_paths: []
+    images:
+      - &test_32k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784437450_32kL/images/1784437450_continuum_image_J2147-8132_IClean_PB.fits"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784437450_32kL/images/1784437450_continuum_image_J2147-8132_IClean.fits"
+  - name: "CMC2_1784443274_8kL"
+    ms_paths: []
+    images:
+      - &test_8k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784443274_8kL/images/1784443274_continuum_image_J2147-8132_IClean_PB.fits"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784443274_8kL/images/1784443274_continuum_image_J2147-8132_IClean.fits"
+  - name: "CMC2_1785059546_4kL"
+    ms_paths: []
+    images:
+      - &test_4k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean.fits"
+  - name: "CMC2_1785065779_1kL"
+    ms_paths: []
+    images:
+      - &test_1k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785065779_1kL/images/1785065779_continuum_image_J2147-8132_IClean_PB.fits"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785065779_1kL/images/1785065779_continuum_image_J2147-8132_IClean.fits"
+
+frequency_ranges:
+  lowband_hz: [8.98e+8, 1.00e+9]
+  highband_hz: [1.46e+9, 1.70e+9]
+
+casa:
+  scans: ""
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  freq_mhz: null
+  freq_hz: null
+  pblimit: 0.05
+  base_prefix: ""
+
+xmatch:
+  max_sep_arcsec: 1.0
+  ra_col_1: "RA"
+  dec_col_1: "DEC"
+  ra_col_2: "RA"
+  dec_col_2: "DEC"
+  coord_frame: "icrs"
+  one_to_many: false
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs:
+    - [&ref_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1786962370_cmc1_4kL/images/pybdsf.results/1786962370_continuum_image_J2147-8132_IClean_PB/1786962370_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &test_32k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784437450_32kL/images/pybdsf.results/1784437450_continuum_image_J2147-8132_IClean_PB/1784437450_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_32k "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed/Sky-CrossMatches/1786962370_CMC1_X_1784437450_32kL_mfs.fits"]
+    - [*ref_catalog,
+       &test_8k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784443274_8kL/images/pybdsf.results/1784443274_continuum_image_J2147-8132_IClean_PB/1784443274_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_8k "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed/Sky-CrossMatches/1786962370_CMC1_X_1784443274_8kL_mfs.fits"]
+    - [*ref_catalog,
+       &test_4k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/pybdsf.results/1785059546_continuum_image_J2147-8132_IClean_PB/1785059546_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_4k "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed/Sky-CrossMatches/1786962370_CMC1_X_1785059546_4kL_mfs.fits"]
+    - [*ref_catalog,
+       &test_1k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785065779_1kL/images/pybdsf.results/1785065779_continuum_image_J2147-8132_IClean_PB/1785065779_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_1k "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/processed/Sky-CrossMatches/1786962370_CMC1_X_1785065779_1kL_mfs.fits"]
+  positions:
+    - {xmatch_table: *xmatch_32k, ref_fits: *ref_image, other_fits: *test_32k_image, otherdatatag: "1784437450_32kL"}
+    - {xmatch_table: *xmatch_8k, ref_fits: *ref_image, other_fits: *test_8k_image, otherdatatag: "1784443274_8kL"}
+    - {xmatch_table: *xmatch_4k, ref_fits: *ref_image, other_fits: *test_4k_image, otherdatatag: "1785059546_4kL"}
+    - {xmatch_table: *xmatch_1k, ref_fits: *ref_image, other_fits: *test_1k_image, otherdatatag: "1785065779_1kL"}
+  flux: {}

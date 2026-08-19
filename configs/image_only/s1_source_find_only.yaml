@@ -1,0 +1,36 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Source-finding only. These images cover approximately 2007–2801 MHz.
+# The available CMC1 S4 image covers approximately 2676–3455 MHz and is not a
+# valid full-band S1 reference. Leave xmatch/positions/flux empty until a CMC1
+# S1 image with matching frequency coverage is supplied.
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/image_only_comparisons/s1/interim"
+  processed_dir: "data/image_only_comparisons/s1/processed"
+  reports_dir: "data/image_only_comparisons/s1/reports"
+  sky_xmatches_dir: "data/image_only_comparisons/s1/processed/Sky-CrossMatches"
+
+reference: {name: "CMC1_S1_NOT_AVAILABLE", ms_paths: [], images: []}
+tests:
+  - {name: "CMC2_1785398173_32kS1", ms_paths: [], images: ["/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785398173_32kS1/images/1785398173_continuum_image_J2147-8132_IClean_PB.fits"]}
+  - {name: "CMC2_1783842626_8kS1", ms_paths: [], images: ["/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783842626_8kS/images/1783842626_continuum_image_J2147-8132_IClean_PB.fits"]}
+  - {name: "CMC2_1783855877_4kS1", ms_paths: [], images: ["/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783855877_4kS/images/1783855877_continuum_image_J2147-8132_IClean_PB.fits"]}
+  - {name: "CMC2_1783848974_1kS1", ms_paths: [], images: ["/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783848974_1kS/images/1783848974_continuum_image_J2147-8132_IClean_PB.fits"]}
+
+casa: {scans: "", lowband_hz: [2.007e9, 2.20e9], highband_hz: [2.60e9, 2.801e9], field: "J2147-8132", datacolumn: "corrected", image_scans: false}
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [2.007e9, 2.20e9]
+  highband_hz: [2.60e9, 2.801e9]
+  reference: {name: "CMC1_S1_NOT_AVAILABLE", cuboid: null, low_image: null, high_image: null}
+  tests:
+    - {name: "CMC2_1785398173_32kS1", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785398173_32kS1/images/1785398173_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1783842626_8kS1", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783842626_8kS/images/1783842626_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1783855877_4kS1", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783855877_4kS/images/1783855877_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1783848974_1kS1", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783848974_1kS/images/1783848974_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+pybdsf: {thresh_isl: 3.5, thresh_pix: 5.0, freq_mhz: null, freq_hz: null, pblimit: 0.05, base_prefix: ""}
+xmatch: {max_sep_arcsec: 1.0, ra_col_1: "RA", dec_col_1: "DEC", ra_col_2: "RA", dec_col_2: "DEC", coord_frame: "icrs", one_to_many: false}
+extra: {force_calibrate: false, images_globs: [], xmatch_pairs: [], positions: [], flux: {}}

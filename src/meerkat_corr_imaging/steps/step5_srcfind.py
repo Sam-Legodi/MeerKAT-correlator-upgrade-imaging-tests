@@ -1,34 +1,44 @@
 from __future__ import annotations
-import subprocess, shlex
-from pathlib import Path
+import sys
 from typing import Iterable, List
+from ..audit import record_skip, register_inputs, run_logged_command
 from ..config import Config
+from .step4_low_high_slice import source_images as low_high_source_images
 
-def _run(cmd: Iterable[str]):
-    print("[PYBDSF] ->", " ".join(shlex.quote(c) for c in cmd))
-    subprocess.run(list(cmd), check=True)
+def _run(cmd: Iterable[str], *, inputs: Iterable[str] = ()):
+    return run_logged_command(cmd, prefix="[PYBDSF]", inputs=inputs)
 
 def run(cfg: Config):
     """
-    Walk images from config (reference + tests) and call scripts/pybdsf_srcfind.py
+    Walk configured images and call the packaged PyBDSF launcher.
     Users may also point this script at directories/globs inside the config via extra.images_globs.
     """
-    script = Path("scripts/pybdsf_srcfind.py")
-    if not script.exists():
-        raise FileNotFoundError(f"Missing {script}")
-
     images: List[str] = []
     images += cfg.reference.images
     for t in cfg.tests:
         images += t.images
+    register_inputs(images)
+    images += low_high_source_images(cfg)
     # optionally allow arbitrary globs in config.extra
     images += cfg.extra.get("images_globs", [])
 
+    # Preserve configuration order while avoiding duplicate processing.
+    images = list(dict.fromkeys(images))
+    register_inputs(images)
+
     if not images:
-        print("[PYBDSF] No images given; nothing to do.")
+        message = "No images given; nothing to do."
+        print(f"[PYBDSF] {message}")
+        record_skip(message)
         return
 
-    cmd = ["python", str(script), "--images", *images]
+    cmd = [
+        sys.executable,
+        "-m",
+        "meerkat_corr_imaging.pybdsf_srcfind",
+        "--images",
+        *images,
+    ]
     if cfg.pybdsf.thresh_isl is not None:
         cmd += ["--isl", str(cfg.pybdsf.thresh_isl)]
     if cfg.pybdsf.thresh_pix is not None:
@@ -40,4 +50,4 @@ def run(cfg: Config):
     if cfg.pybdsf.base_prefix:
         cmd += ["--base-prefix", cfg.pybdsf.base_prefix]
 
-    _run(cmd)
+    _run(cmd, inputs=images)

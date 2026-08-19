@@ -1,0 +1,100 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Completion template for image-domain reference comparison.
+#
+# This file is intentionally NOT ready for xm/pos/flux. Add a trusted,
+# independently produced reference image and the corresponding FITS source
+# catalogues before enabling those stages. Do not treat the non-PB and
+# PB-corrected versions of 1785059546 as independent reference/test images.
+#
+# Run the slice and source-finding stages only after replacing the reference placeholder:
+#   PYTHONPATH=src python -m meerkat_corr_imaging.cli low_high_slice --config configs/1785059546_reference_comparison_template.yaml
+#   PYTHONPATH=src python -m meerkat_corr_imaging.cli src --config configs/1785059546_reference_comparison_template.yaml
+
+paths:
+  raw_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL"
+  interim_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/interim"
+  processed_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/processed"
+  reports_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/reports"
+  sky_xmatches_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/processed/Sky-CrossMatches"
+
+reference:
+  name: "REPLACE_WITH_TRUSTED_REFERENCE"
+  ms_paths: []
+  images: []
+  # Add one PB-corrected reference continuum image produced with a compatible
+  # sky footprint, frequency range, weighting and restoring resolution.
+
+tests:
+  - name: "1785059546_4kL_J2147-8132"
+    ms_paths: []
+    images:
+      - "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits"
+
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference: {name: "REPLACE_WITH_TRUSTED_REFERENCE", cuboid: null, low_image: null, high_image: null}
+  tests:
+    - name: "1785059546_4kL_J2147-8132"
+      cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean.fits"
+      low_image: null
+      high_image: null
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  # Set this to null if both reference and test headers carry valid frequencies.
+  # A single fallback value is only valid when all configured images share it.
+  freq_hz: null
+  freq_mhz: null
+  pblimit: 0.05
+  base_prefix: ""
+
+xmatch:
+  max_sep_arcsec: 1.0
+  ra_col_1: "RA"
+  dec_col_1: "DEC"
+  ra_col_2: "RA"
+  dec_col_2: "DEC"
+  coord_frame: "icrs"
+  one_to_many: false
+
+extra:
+  force_calibrate: false
+  images_globs: []
+
+  # Populate after source finding has produced FITS catalogues for both images.
+  # The current pybdsf_srcfind.py exports an ASCII "-source-cat.txt"; Step 6
+  # requires FITS input, so a FITS GAUL/SRL export is required before enabling
+  # this pair.
+  xmatch_pairs: []
+  # Example:
+  # xmatch_pairs:
+  #   - ["/ABS/PATH/reference-source-cat.fits",
+  #      "/ABS/PATH/1785059546-source-cat.fits",
+  #      "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/processed/reference_X_1785059546_mfs.fits"]
+
+  # Populate after the MFS cross-match exists.
+  positions: []
+  # Example:
+  # positions:
+  #   - xmatch_table: "/ABS/PATH/reference_X_1785059546_mfs.fits"
+  #     ref_fits: "/ABS/PATH/trusted_reference_PB.fits"
+  #     other_fits: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits"
+  #     otherdatatag: "1785059546_4kL"
+
+  # The current flux wrapper requires low-band, high-band and MFS cross-matches.
+  # Leave this empty until matching low/high reference and test images exist.
+  flux: {}

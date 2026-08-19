@@ -1,0 +1,79 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Exact wide-L n10732k CMC1/test pairing. The 4kwide products are used because
+# both span approximately 888–1661 MHz. The narrow four-subband test product
+# in the parent images directory is intentionally excluded.
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/image_only_comparisons/l_n10732k/interim"
+  processed_dir: "data/image_only_comparisons/l_n10732k/processed"
+  reports_dir: "data/image_only_comparisons/l_n10732k/reports"
+  sky_xmatches_dir: "data/image_only_comparisons/l_n10732k/processed/Sky-CrossMatches"
+
+reference:
+  name: "CMC1_1785941476_n10732kL_4kwide"
+  ms_paths: []
+  images:
+    - &ref_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/1785941476_continuum_image_J2147-8132_IClean_PB.fits"
+
+tests:
+  - name: "CMC2_1783266356_n10732kL_4kwide"
+    ms_paths: []
+    images:
+      - &test_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783266360_n10732kL/images/4kwide/1783266356_continuum_image_J2147-8132_IClean_PB.fits"
+
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference:
+    name: "CMC1_1785941476_n10732kL_4kwide"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/1785941476_continuum_image_J2147-8132_IClean.fits"
+    low_image: null
+    high_image: null
+  tests:
+    - name: "CMC2_1783266356_n10732kL_4kwide"
+      cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783266360_n10732kL/images/4kwide/1783266356_continuum_image_J2147-8132_IClean.fits"
+      low_image: null
+      high_image: null
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  freq_mhz: null
+  freq_hz: null
+  pblimit: 0.05
+  base_prefix: ""
+
+xmatch:
+  max_sep_arcsec: 1.0
+  ra_col_1: "RA"
+  dec_col_1: "DEC"
+  ra_col_2: "RA"
+  dec_col_2: "DEC"
+  coord_frame: "icrs"
+  one_to_many: false
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs:
+    - [&ref_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/pybdsf.results/1785941476_continuum_image_J2147-8132_IClean_PB/1785941476_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &test_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1783266360_n10732kL/images/4kwide/pybdsf.results/1783266356_continuum_image_J2147-8132_IClean_PB/1783266356_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_table "data/image_only_comparisons/l_n10732k/processed/Sky-CrossMatches/1785941476_CMC1_X_1783266356_CMC2_mfs.fits"]
+  positions:
+    - xmatch_table: *xmatch_table
+      ref_fits: *ref_image
+      other_fits: *test_image
+      otherdatatag: "1783266356_n10732kL"
+  flux: {}

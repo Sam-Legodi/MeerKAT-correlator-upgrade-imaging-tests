@@ -37,6 +37,26 @@ casa:
   lowband_hz: [8.98e8, 1.00e9]  # L-band lowband frequency range (otherwise lower quartile of band)
   highband_hz: [1.46e9, 1.70e9] # L-band highband frequency range (otherwise upper quartile of band)
 
+# Extract one maximum-coverage non-PB cuboid plane for each requested band.
+# If low_image/high_image already exist they are validated and reused; otherwise
+# they are created at those paths (or beside the cuboid when left null).
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference:
+    name: "Lband_ref"
+    cuboid: "/ABS/PATH/TO/ref_continuum_IClean.fits"
+    low_image: "/ABS/PATH/TO/ref_image_lowband.fits"
+    high_image: "/ABS/PATH/TO/ref_image_highband.fits"
+  tests:
+    - name: "Lband_1757723806"
+      cuboid: "/ABS/PATH/TO/1757723806_continuum_IClean.fits"
+      low_image: null
+      high_image: null
+
 # PyBDSF defaults
 pybdsf:
   thresh_isl: 3.5

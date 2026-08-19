@@ -1,0 +1,51 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+paths:
+  raw_dir: "/home/slegodi/corr_upgrade_tests/2026/data"
+  interim_dir: "/home/slegodi/corr_upgrade_tests/2026/1781430924_outputs/interim"
+  processed_dir: "/home/slegodi/corr_upgrade_tests/2026/1781430924_outputs/processed"
+  reports_dir: "/home/slegodi/corr_upgrade_tests/2026/1781430924_outputs/reports"
+  sky_xmatches_dir: "/home/slegodi/corr_upgrade_tests/2026/1781430924_outputs/processed/Sky-CrossMatches"
+
+reference:
+  name: "none"
+  ms_paths: []
+  images: []
+
+tests:
+  - name: "1781430924_J0408_offset_fields"
+    ms_paths:
+      - "/home/slegodi/corr_upgrade_tests/2026/data/1781430924_sdp_l0.full.ms"
+    images: []
+
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  field: "J0410-65off,J0411-65off,J0413-65off,J0415-65off,J0416-65off"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: false
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference: {name: "none", cuboid: null, low_image: null, high_image: null}
+  tests: []
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  freq_mhz: null
+
+xmatch:
+  max_sep_arcsec: 1.0
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs: []
+  positions: []
+  flux: {}

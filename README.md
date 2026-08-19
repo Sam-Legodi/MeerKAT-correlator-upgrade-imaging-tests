@@ -18,12 +18,13 @@ This repository standardizes the end-to-end process and makes it easy to share r
   * [1) Install the project locally (once per machine)](#1-install-the-project-locally-once-per-machine)
   * [2) Prepare a master config](#2-prepare-a-master-config)
   * [3) Run individual steps (surgical control)](#3-run-individual-steps-surgical-control)
-    * [3.1 Visibility QA (Step 2 / Step 4 repeat)](#31-visibility-qa-step-2--step-4-repeat)
+    * [3.1 Visibility QA (Step 2)](#31-visibility-qa-step-2)
     * [3.2 Calibrate & Image with CASA (Step 3)](#32-calibrate--image-with-casa-step-3)
-    * [3.3 Source finding with PyBDSF (Step 5)](#33-source-finding-with-pybdsf-step-5)
-    * [3.4 Cross-matching catalogues (Step 6)](#34-cross-matching-catalogues-step-6)
-    * [3.5 Astrometry (positions) analysis (Step 7a)](#35-astrometry-positions-analysis-step-7a)
-    * [3.6 Flux analysis (Step 7b)](#36-flux-analysis-step-7b)
+    * [3.3 Low/high cuboid slices (Step 4)](#33-lowhigh-cuboid-slices-step-4)
+    * [3.4 Source finding with PyBDSF (Step 5)](#34-source-finding-with-pybdsf-step-5)
+    * [3.5 Cross-matching catalogues (Step 6)](#35-cross-matching-catalogues-step-6)
+    * [3.6 Astrometry (positions) analysis (Step 7a)](#36-astrometry-positions-analysis-step-7a)
+    * [3.7 Flux analysis (Step 7b)](#37-flux-analysis-step-7b)
   * [4) Run the whole pipeline (hands-off)](#4-run-the-whole-pipeline-hands-off)
   * [5) Where things go (default)](#5-where-things-go-default)
   * [6) Quick verification checklist](#6-quick-verification-checklist)
@@ -46,10 +47,11 @@ This repository standardizes the end-to-end process and makes it easy to share r
 
 1. Inspecting corrected visibilities,
 2. Calibrating and imaging any uncorrected fields in CASA,
-3. Running PyBDSF for source catalogues,
-4. Cross-matching test vs reference catalogues,
-5. Analyzing astrometric offsets and flux consistency, and
-6. Producing ready-to-share figures and DOCX reports.
+3. Extracting configured low/high planes from MFImage cuboids when needed,
+4. Running PyBDSF for source catalogues,
+5. Cross-matching test vs reference catalogues,
+6. Analyzing astrometric offsets and flux consistency, and
+7. Producing ready-to-share figures and DOCX reports.
 
 ---
 
@@ -85,15 +87,24 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │     ├─ __init__.py
 │     ├─ cli.py                 # optional CLI wrapper (`python -m meerkat_corr_imaging.cli`)
 │     ├─ config.py              # config loading/validation helpers
+│     ├─ flux_analysis.py       # flux comparison and report module
+│     ├─ low_high_slice.py      # installable low/high cuboid extractor
+│     ├─ positions_analysis.py  # astrometric analysis module
+│     ├─ pybdsf_srcfind.py      # PyBDSF launcher module
+│     ├─ standalone_xxyy_solve.py # packaged CASA calibration script
+│     ├─ tclean_two_bands.py    # packaged CASA imaging script
+│     ├─ vis_amp_analyze.py     # visibility QA module
+│     ├─ xmatch_pybdsf.py       # catalogue matching module
 │     └─ steps/
 │        ├─ step1_archive_docs.py     # documentation helpers (no code execution)
 │        ├─ step2_vis_analysis.py     # wraps vis_amp_analyze.py
 │        ├─ step3_calibrate_image.py  # wraps CASA scripts
+│        ├─ step4_low_high_slice.py   # resolves/reuses/extracts cuboid planes
 │        ├─ step5_srcfind.py          # wraps pybdsf_srcfind.py
 │        ├─ step6_xmatch.py           # wraps xmatch_pybdsf.py
 │        ├─ step7_positions.py        # wraps positions analysis
 │        └─ step7_flux.py             # wraps flux notebook export
-├─ scripts/                     # runnable entrypoints (kept stable)
+├─ scripts/                     # backward-compatible thin entrypoints
 │  ├─ vis_amp_analyze.py
 │  ├─ standalone_xxyy_solve.py
 │  ├─ tclean_two_bands.py
@@ -102,12 +113,12 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ positions_analysis.py
 │  └─ flux_analysis.ipynb
 ├─ tests/
-│  ├─ test_config.py
-│  ├─ test_paths.py
-│  └─ test_smoke_pipeline.py
+│  └─ test_low_high_slice.py
 ```
 
-> **Note:** Existing scripts continue to live under `scripts/`. New wrappers in `src/meerkat_corr_imaging/steps/` make the pipeline importable and testable.
+> **Note:** Pipeline implementations live inside the installable package.
+> Files under `scripts/` are compatibility entry points only; pipeline steps
+> do not resolve them relative to the current working directory.
 
 ---
 
@@ -227,6 +238,10 @@ Edit `config.yaml` (see contents of `configs/example*_local.yaml config.yaml`):
 * `reference.ms_paths` -> corrected MeasurementSets for your reference field
 * `tests[].ms_paths` -> corrected MeasurementSets for each test field
 * `reference.images` and `tests[].images` -> PB-corrected continuum and/or MFS, low-band, and high-band FITS image files
+* `reference.cuboid` and `tests[].cuboid` -> non-PB MFImage cuboids used to
+  create missing low/high products; optional `low_image` and `high_image`
+  paths reuse existing products
+* `frequency_ranges` -> the shared low/high ranges used by CASA and slicing
 * `extra.xmatch_pairs`, `extra.positions`, `extra.flux` -> wire the files your wrappers need to perform cross-matching (cross-matching FITS catalogue pairs), and also cross-matched FITS catalogues for astrometry and flux analysis.
 * `paths.*` -> where outputs will be written (defaults live under `data/` and are auto-created)
 
@@ -237,20 +252,33 @@ You can keep multiple configs (for example, one per dataset) and pass `--config 
 ```yaml
 project_name: "MeerKAT-correlator-upgrade-imaging-tests"
 paths:
-  raw: "data/raw"
-  interim: "data/interim"
-  processed: "data/processed"
-  reports: "data/reports"
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  reports_dir: "data/reports"
+  sky_xmatches_dir: "data/processed/Sky-CrossMatches"
 
 reference:
   name: "ref_field"
   ms_paths: []
   images: []
+  cuboid: "/path/ref_IClean.fits"
+# To reuse existing products instead, add low_image and high_image here.
 
 tests:
   - name: "test_field_A"
     ms_paths: []
     images: []
+    cuboid: "/path/test_IClean.fits"
+
+frequency_ranges:
+  lowband_hz: [8.98e+8, 1.00e+9]
+  highband_hz: [1.46e+9, 1.70e+9]
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
 
 extra:
   xmatch_pairs: []
@@ -262,9 +290,13 @@ extra:
 
 ### 3) Run individual steps (surgical control)
 
-Each CLI command wraps a helper in `src/meerkat_corr_imaging/steps/...`, which in turn runs the actual script under `scripts/` with the arguments pulled from `config.yaml`.
+Each CLI command wraps a helper in `src/meerkat_corr_imaging/steps/...`.
+Python-backed helpers use the active interpreter with an installable
+`meerkat_corr_imaging` module. CASA-backed helpers pass CASA an absolute path
+to the packaged CASA script. No pipeline step resolves its implementation
+relative to the launch directory.
 
-#### 3.1 Visibility QA (Step 2 / Step 4 repeat)
+#### 3.1 Visibility QA (Step 2)
 
 ```bash
 python -m meerkat_corr_imaging.cli vis --config config.yaml
@@ -272,7 +304,8 @@ python -m meerkat_corr_imaging.cli vis --config config.yaml
 
 What happens:
 
-* For each `reference.ms_paths` and each test `ms_paths`, it runs `scripts/vis_amp_analyze.py ...`.
+* For each `reference.ms_paths` and each test `ms_paths`, it runs
+  `python -m meerkat_corr_imaging.vis_amp_analyze ...`.
 * Outputs: CSVs, plots, and a concise DOCX report, typically under `data/interim/<msbase>/` (the wrapper passes `--outdir`).
 
 Check after running:
@@ -290,14 +323,44 @@ python -m meerkat_corr_imaging.cli cal --config config.yaml
 What happens:
 
 * If `extra.force_calibrate: true`, it runs `standalone_xxyy_solve.py` once (rare).
-* Then it runs `casa -c scripts/tclean_two_bands.py [--scans=...] <all MS>`.
+* Then it runs `casa -c <absolute-packaged-path>/tclean_two_bands.py [--scans=...] <all MS>`.
 * Products go next to each MS, usually in `<msdir>/images/...` with FITS exported; QA text files are created.
 
 Before running:
 
 * Ensure `casa` is callable: `which casa`. If not, `export CASA=/full/path/to/casa` and rerun.
 
-#### 3.3 Source finding with PyBDSF (Step 5)
+#### 3.3 Low/high cuboid slices (Step 4)
+
+```bash
+python -m meerkat_corr_imaging.cli low_high_slice --config config.yaml
+```
+
+The pipeline invokes the packaged extractor as
+`python -m meerkat_corr_imaging.low_high_slice`, so this step does not depend
+on the current working directory.
+
+What happens:
+
+* Reads the shared `frequency_ranges.lowband_hz` and `highband_hz` values.
+  A step-specific value under `low_high_slice` is only needed when slicing
+  intentionally uses a different range from CASA.
+* For each configured reference/test cuboid, reads `NTERM`, `NSPEC`, and the
+  `FRELnnnn`/`FEFFnnnn`/`FREHnnnn` plane metadata.
+* Selects the single plane with the largest overlap with each requested range.
+  Ties go to the lower-frequency plane for low band and the higher-frequency
+  plane for high band.
+* Writes non-PB 2-D `_lowband.fits` and `_highband.fits` products beside the
+  cuboid. Configured `low_image`/`high_image` paths override these names; a
+  missing configured output must still have the same parent directory as its
+  cuboid. Existing images elsewhere may be validated and reused.
+* Existing configured or deterministic files are validated and reused unless
+  `overwrite: true`.
+
+Run this step before `src`. With `add_to_source_finding: true`, the resolved
+low/high files are automatically added to the PyBDSF image list.
+
+#### 3.4 Source finding with PyBDSF (Step 5)
 
 ```bash
 python -m meerkat_corr_imaging.cli src --config config.yaml
@@ -305,8 +368,9 @@ python -m meerkat_corr_imaging.cli src --config config.yaml
 
 What happens:
 
-* Collects images from `reference.images` plus each test `images` (and any `extra.images_globs`).
-* Runs `scripts/pybdsf_srcfind.py --images ... [--isl ... --pix ... --freq-* ...]`.
+* Collects images from `reference.images`, each test `images`, resolved
+  low/high slice products, and any `extra.images_globs`.
+* Runs `python -m meerkat_corr_imaging.pybdsf_srcfind --images ... [--isl ... --pix ... --freq-* ...]`.
 * if input images do not have frequency information in their headers, run this step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section.
 * PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
 
@@ -314,7 +378,7 @@ Sanity check:
 
 * Look for generated catalogues (FITS tables), usually `*_gaul.fits` or `*_srl.fits`.
 
-#### 3.4 Cross-matching catalogues (Step 6)
+#### 3.5 Cross-matching catalogues (Step 6)
 
 ```bash
 python -m meerkat_corr_imaging.cli xm --config config.yaml
@@ -323,14 +387,15 @@ python -m meerkat_corr_imaging.cli xm --config config.yaml
 What happens:
 
 * Reads `extra.xmatch_pairs`: each item is `[input1, input2]` or `[input1, input2, output]`.
-* Calls `scripts/xmatch_pybdsf.py` for each pair with `--max-error` and friends.
+* Calls `python -m meerkat_corr_imaging.xmatch_pybdsf` for each pair with
+  `--max-error` and related options.
 * Without an explicit `output`, the wrapper creates one under `data/processed/Sky-CrossMatches/` with a sensible name.
 
 Verify:
 
 * `data/processed/Sky-CrossMatches/*.fits` exists and has match columns.
 
-#### 3.5 Astrometry (positions) analysis (Step 7a)
+#### 3.6 Astrometry (positions) analysis (Step 7a)
 
 ```bash
 python -m meerkat_corr_imaging.cli pos --config config.yaml
@@ -339,13 +404,14 @@ python -m meerkat_corr_imaging.cli pos --config config.yaml
 What happens:
 
 * Loops over `extra.positions` entries, each with `xmatch_table`, `ref_fits`, `other_fits`, and optional `per_scan_glob`, `otherdatatag`.
-* Calls `scripts/positions_analysis.py ...` to generate the five figures plus a DOCX with interpretation.
+* Calls `python -m meerkat_corr_imaging.positions_analysis ...` to generate
+  the figures and DOCX interpretation.
 
 Outputs:
 
 * Plots and DOCX files under `data/reports/crossmatched-positions/` (or wherever your script writes them).
 
-#### 3.6 Flux analysis (Step 7b)
+#### 3.7 Flux analysis (Step 7b)
 
 ```bash
 python -m meerkat_corr_imaging.cli flux --config config.yaml
@@ -354,7 +420,8 @@ python -m meerkat_corr_imaging.cli flux --config config.yaml
 What happens:
 
 * Reads `extra.flux` with `ref_low_xmatch`, `ref_high_xmatch`, `ref_mfs_xmatch` (required), and optional `scans_glob`, `docx_name`.
-* Calls `scripts/flux_analysis.py ...` to produce plots plus a DOCX summary.
+* Calls `python -m meerkat_corr_imaging.flux_analysis ...` to produce plots
+  plus a DOCX summary.
 
 Outputs:
 
@@ -374,12 +441,21 @@ Order:
 
 1. `vis`
 2. `cal`
-3. `src`
-4. `xm`
-5. `pos`
-6. `flux`
+3. `low_high_slice`
+4. `src`
+5. `xm`
+6. `pos`
+7. `flux`
 
 Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
+
+Immediately after every requested step, the CLI audits the combined stdout/stderr
+log and prints an input-level summary: succeeded, failed, and not-run inputs. The
+same summary and complete command output are retained under
+`<reports_dir>/pipeline_audits/<timestamp>_<step>.log`. Steps with independent
+inputs attempt all of them before reporting failure, so one bad image, MS, or
+catalogue pair does not hide the status of the remaining inputs. The `all`
+command still stops before downstream steps when the completed step is failed.
 
 ---
 
@@ -390,6 +466,7 @@ Each sub-step logs the exact command it runs. Missing inputs cause a polite skip
 * Processed products (images, catalogues, cross-matches): `data/processed/...`
   * Cross-matches specifically: `data/processed/Sky-CrossMatches/`
 * Reports (DOCX, figures): `data/reports/...`
+  * Per-step pipeline logs and audits: `data/reports/pipeline_audits/*.log`
 
 You can change these in `config.yaml -> paths.*`. Directories are created automatically.
 
@@ -399,6 +476,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 
 * After `vis`: CSVs and PNGs under `data/interim/*/`
 * After `cal`: CASA images in each MS `images/` directory with FITS and QA exports
+* After `low_high_slice`: non-PB `_lowband.fits` and `_highband.fits` beside each cuboid
 * After `src`: PyBDSF catalogues (FITS) near images or in `data/processed/`
 * After `xm`: matched FITS tables in `data/processed/Sky-CrossMatches/`
 * After `pos` and `flux`: DOCX files plus plots under `data/reports/`
@@ -408,6 +486,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 ### 7) Common gotchas (and fixes)
 
 * `casa` not found -> export `CASA=/full/path/to/casa` or add it to your `PATH`; retry `mci cal`
+* Missing low/high files -> configure a valid non-PB MFImage `cuboid` and run `low_high_slice` before `src`
 * if input images do not have frequency information in their headers, run the PYBDSF step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section. 
 * Permission errors writing under `data/` -> adjust `paths.*` to point at a writable location
 * Wrong FITS paths -> update `config.yaml`; wrappers only forward paths

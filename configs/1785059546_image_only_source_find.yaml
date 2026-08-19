@@ -1,0 +1,75 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# Runnable with the existing 1785059546 FITS products.
+# Recommended commands:
+#   PYTHONPATH=src python -m meerkat_corr_imaging.cli low_high_slice --config configs/1785059546_image_only_source_find.yaml
+#   PYTHONPATH=src python -m meerkat_corr_imaging.cli src --config configs/1785059546_image_only_source_find.yaml
+#
+# The PB-corrected continuum image remains the MFS science image. The
+# low_high_slice step additionally extracts non-PB low/high planes from the
+# MFImage cuboid before source finding.
+
+paths:
+  raw_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL"
+  interim_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/interim"
+  processed_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/processed"
+  reports_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/reports"
+  sky_xmatches_dir: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/imaging_test_pipeline_outputs/processed/Sky-CrossMatches"
+
+reference:
+  name: "not_available"
+  ms_paths: []
+  images: []
+
+tests:
+  - name: "1785059546_4kL_J2147-8132"
+    ms_paths: []
+    images:
+      - "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits"
+
+# Present for schema compatibility. The image-only run does not invoke CASA.
+casa:
+  scans: ""
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference: {name: "not_available", cuboid: null, low_image: null, high_image: null}
+  tests:
+    - name: "1785059546_4kL_J2147-8132"
+      cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean.fits"
+      low_image: null
+      high_image: null
+
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  # Explicitly recorded from CRVAL3 in the PB-corrected FITS header.
+  freq_hz: 1283059570.312
+  freq_mhz: null
+  pblimit: 0.05
+  base_prefix: ""
+
+xmatch:
+  max_sep_arcsec: 1.0
+  ra_col_1: "RA"
+  dec_col_1: "DEC"
+  ra_col_2: "RA"
+  dec_col_2: "DEC"
+  coord_frame: "icrs"
+  one_to_many: false
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs: []
+  positions: []
+  flux: {}

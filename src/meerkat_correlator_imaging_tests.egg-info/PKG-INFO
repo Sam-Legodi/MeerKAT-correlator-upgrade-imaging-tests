@@ -40,12 +40,13 @@ This repository standardizes the end-to-end process and makes it easy to share r
   * [1) Install the project locally (once per machine)](#1-install-the-project-locally-once-per-machine)
   * [2) Prepare a master config](#2-prepare-a-master-config)
   * [3) Run individual steps (surgical control)](#3-run-individual-steps-surgical-control)
-    * [3.1 Visibility QA (Step 2 / Step 4 repeat)](#31-visibility-qa-step-2--step-4-repeat)
+    * [3.1 Visibility QA (Step 2)](#31-visibility-qa-step-2)
     * [3.2 Calibrate & Image with CASA (Step 3)](#32-calibrate--image-with-casa-step-3)
-    * [3.3 Source finding with PyBDSF (Step 5)](#33-source-finding-with-pybdsf-step-5)
-    * [3.4 Cross-matching catalogues (Step 6)](#34-cross-matching-catalogues-step-6)
-    * [3.5 Astrometry (positions) analysis (Step 7a)](#35-astrometry-positions-analysis-step-7a)
-    * [3.6 Flux analysis (Step 7b)](#36-flux-analysis-step-7b)
+    * [3.3 Low/high cuboid slices (Step 4)](#33-lowhigh-cuboid-slices-step-4)
+    * [3.4 Source finding with PyBDSF (Step 5)](#34-source-finding-with-pybdsf-step-5)
+    * [3.5 Cross-matching catalogues (Step 6)](#35-cross-matching-catalogues-step-6)
+    * [3.6 Astrometry (positions) analysis (Step 7a)](#36-astrometry-positions-analysis-step-7a)
+    * [3.7 Flux analysis (Step 7b)](#37-flux-analysis-step-7b)
   * [4) Run the whole pipeline (hands-off)](#4-run-the-whole-pipeline-hands-off)
   * [5) Where things go (default)](#5-where-things-go-default)
   * [6) Quick verification checklist](#6-quick-verification-checklist)
@@ -68,10 +69,11 @@ This repository standardizes the end-to-end process and makes it easy to share r
 
 1. Inspecting corrected visibilities,
 2. Calibrating and imaging any uncorrected fields in CASA,
-3. Running PyBDSF for source catalogues,
-4. Cross-matching test vs reference catalogues,
-5. Analyzing astrometric offsets and flux consistency, and
-6. Producing ready-to-share figures and DOCX reports.
+3. Extracting configured low/high planes from MFImage cuboids when needed,
+4. Running PyBDSF for source catalogues,
+5. Cross-matching test vs reference catalogues,
+6. Analyzing astrometric offsets and flux consistency, and
+7. Producing ready-to-share figures and DOCX reports.
 
 ---
 
@@ -107,10 +109,12 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │     ├─ __init__.py
 │     ├─ cli.py                 # optional CLI wrapper (`python -m meerkat_corr_imaging.cli`)
 │     ├─ config.py              # config loading/validation helpers
+│     ├─ low_high_slice.py      # installable low/high cuboid extractor
 │     └─ steps/
 │        ├─ step1_archive_docs.py     # documentation helpers (no code execution)
 │        ├─ step2_vis_analysis.py     # wraps vis_amp_analyze.py
 │        ├─ step3_calibrate_image.py  # wraps CASA scripts
+│        ├─ step4_low_high_slice.py   # resolves/reuses/extracts cuboid planes
 │        ├─ step5_srcfind.py          # wraps pybdsf_srcfind.py
 │        ├─ step6_xmatch.py           # wraps xmatch_pybdsf.py
 │        ├─ step7_positions.py        # wraps positions analysis
@@ -124,12 +128,12 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ positions_analysis.py
 │  └─ flux_analysis.ipynb
 ├─ tests/
-│  ├─ test_config.py
-│  ├─ test_paths.py
-│  └─ test_smoke_pipeline.py
+│  └─ test_low_high_slice.py
 ```
 
-> **Note:** Existing scripts continue to live under `scripts/`. New wrappers in `src/meerkat_corr_imaging/steps/` make the pipeline importable and testable.
+> **Note:** External workflow scripts remain under `scripts/`. The low/high
+> extractor and its wrapper live inside the installable package so that step 4
+> is independent of the current working directory.
 
 ---
 
@@ -150,6 +154,9 @@ MeerKAT-correlator-upgrade-imaging-tests/
 Create a dedicated virtual environment and install this repository in editable mode so CLI wrappers pick up your edits immediately.
 
 ```bash
+# Get the repo
+# git clone https://github.com/Sam-Legodi/MeerKAT-correlator-upgrade-imaging-tests.git
+# cd MeerKAT-correlator-upgrade-imaging-tests
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -188,12 +195,18 @@ With Conda (recommended on macOS and Linux):
 conda install -n meerkat-ci -c conda-forge python-casacore pybdsf
 ```
 
-On Linux systems with casacore already available you can alternatively use pip:
+On Linux systems with casacore already available, you can alternatively use pip:
 
 ```bash
 pip install -e ".[radio]"            # installs python-casacore from PyPI
-pip install git+https://github.com/lofar-astron/PyBDSF.git@master
 ```
+
+Older BDSF requires numpy<2
+If this fails: 
+```bash
+python -m pip install bdsf    
+```
+Then do refer to: https://github.com/lofar-astron/PyBDSF.
 
 If you maintain your own builds, ensure both packages are on the environment `PYTHONPATH` before running `python -m meerkat_corr_imaging.cli ...`.
 
@@ -235,7 +248,7 @@ Make a working copy of the example and fill in your paths (MS files, FITS images
 cp configs/example_local.yaml config.yaml
 ```
 
-Edit `config.yaml` (see contents of `configs/example_local.yaml config.yaml`):
+Edit `config.yaml` (see contents of `configs/example*_local.yaml config.yaml`):
 
 * `reference.ms_paths` -> corrected MeasurementSets for your reference field
 * `tests[].ms_paths` -> corrected MeasurementSets for each test field
@@ -265,6 +278,23 @@ tests:
     ms_paths: []
     images: []
 
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [8.98e8, 1.00e9]
+  highband_hz: [1.46e9, 1.70e9]
+  reference:
+    name: "ref_field"
+    cuboid: "/path/ref_IClean.fits"
+    low_image: null
+    high_image: null
+  tests:
+    - name: "test_field_A"
+      cuboid: "/path/test_IClean.fits"
+      low_image: null
+      high_image: null
+
 extra:
   xmatch_pairs: []
   positions: []
@@ -275,9 +305,11 @@ extra:
 
 ### 3) Run individual steps (surgical control)
 
-Each CLI command wraps a helper in `src/meerkat_corr_imaging/steps/...`, which in turn runs the actual script under `scripts/` with the arguments pulled from `config.yaml`.
+Each CLI command wraps a helper in `src/meerkat_corr_imaging/steps/...`. Most
+helpers run a script under `scripts/`; the low/high extractor is an installable
+module invoked with `python -m meerkat_corr_imaging.low_high_slice`.
 
-#### 3.1 Visibility QA (Step 2 / Step 4 repeat)
+#### 3.1 Visibility QA (Step 2)
 
 ```bash
 python -m meerkat_corr_imaging.cli vis --config config.yaml
@@ -310,7 +342,37 @@ Before running:
 
 * Ensure `casa` is callable: `which casa`. If not, `export CASA=/full/path/to/casa` and rerun.
 
-#### 3.3 Source finding with PyBDSF (Step 5)
+#### 3.3 Low/high cuboid slices (Step 4)
+
+```bash
+python -m meerkat_corr_imaging.cli low_high_slice --config config.yaml
+```
+
+The pipeline invokes the packaged extractor as
+`python -m meerkat_corr_imaging.low_high_slice`, so this step does not depend
+on the current working directory.
+
+What happens:
+
+* Reads `low_high_slice.lowband_hz` and `highband_hz`.
+  Both are required when the step is enabled. They are independent of the
+  similarly named CASA imaging ranges.
+* For each configured reference/test cuboid, reads `NTERM`, `NSPEC`, and the
+  `FRELnnnn`/`FEFFnnnn`/`FREHnnnn` plane metadata.
+* Selects the single plane with the largest overlap with each requested range.
+  Ties go to the lower-frequency plane for low band and the higher-frequency
+  plane for high band.
+* Writes non-PB 2-D `_lowband.fits` and `_highband.fits` products beside the
+  cuboid. Configured `low_image`/`high_image` paths override these names; a
+  missing configured output must still have the same parent directory as its
+  cuboid. Existing images elsewhere may be validated and reused.
+* Existing configured or deterministic files are validated and reused unless
+  `overwrite: true`.
+
+Run this step before `src`. With `add_to_source_finding: true`, the resolved
+low/high files are automatically added to the PyBDSF image list.
+
+#### 3.4 Source finding with PyBDSF (Step 5)
 
 ```bash
 python -m meerkat_corr_imaging.cli src --config config.yaml
@@ -318,7 +380,8 @@ python -m meerkat_corr_imaging.cli src --config config.yaml
 
 What happens:
 
-* Collects images from `reference.images` plus each test `images` (and any `extra.images_globs`).
+* Collects images from `reference.images`, each test `images`, resolved
+  low/high slice products, and any `extra.images_globs`.
 * Runs `scripts/pybdsf_srcfind.py --images ... [--isl ... --pix ... --freq-* ...]`.
 * if input images do not have frequency information in their headers, run this step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section.
 * PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
@@ -327,7 +390,7 @@ Sanity check:
 
 * Look for generated catalogues (FITS tables), usually `*_gaul.fits` or `*_srl.fits`.
 
-#### 3.4 Cross-matching catalogues (Step 6)
+#### 3.5 Cross-matching catalogues (Step 6)
 
 ```bash
 python -m meerkat_corr_imaging.cli xm --config config.yaml
@@ -343,7 +406,7 @@ Verify:
 
 * `data/processed/Sky-CrossMatches/*.fits` exists and has match columns.
 
-#### 3.5 Astrometry (positions) analysis (Step 7a)
+#### 3.6 Astrometry (positions) analysis (Step 7a)
 
 ```bash
 python -m meerkat_corr_imaging.cli pos --config config.yaml
@@ -358,7 +421,7 @@ Outputs:
 
 * Plots and DOCX files under `data/reports/crossmatched-positions/` (or wherever your script writes them).
 
-#### 3.6 Flux analysis (Step 7b)
+#### 3.7 Flux analysis (Step 7b)
 
 ```bash
 python -m meerkat_corr_imaging.cli flux --config config.yaml
@@ -387,10 +450,11 @@ Order:
 
 1. `vis`
 2. `cal`
-3. `src`
-4. `xm`
-5. `pos`
-6. `flux`
+3. `low_high_slice`
+4. `src`
+5. `xm`
+6. `pos`
+7. `flux`
 
 Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
 
@@ -412,6 +476,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 
 * After `vis`: CSVs and PNGs under `data/interim/*/`
 * After `cal`: CASA images in each MS `images/` directory with FITS and QA exports
+* After `low_high_slice`: non-PB `_lowband.fits` and `_highband.fits` beside each cuboid
 * After `src`: PyBDSF catalogues (FITS) near images or in `data/processed/`
 * After `xm`: matched FITS tables in `data/processed/Sky-CrossMatches/`
 * After `pos` and `flux`: DOCX files plus plots under `data/reports/`
@@ -421,6 +486,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 ### 7) Common gotchas (and fixes)
 
 * `casa` not found -> export `CASA=/full/path/to/casa` or add it to your `PATH`; retry `mci cal`
+* Missing low/high files -> configure a valid non-PB MFImage `cuboid` and run `low_high_slice` before `src`
 * if input images do not have frequency information in their headers, run the PYBDSF step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section. 
 * Permission errors writing under `data/` -> adjust `paths.*` to point at a writable location
 * Wrong FITS paths -> update `config.yaml`; wrappers only forward paths
