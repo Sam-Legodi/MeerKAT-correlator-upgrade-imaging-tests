@@ -1,0 +1,67 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# S4 delivered-image comparisons. CMC1 1787034555 1kS4 has matching frequency
+# coverage (approximately 2676–3455 MHz) and is the available S4 reference.
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/image_only_comparisons/s4/interim"
+  processed_dir: "data/image_only_comparisons/s4/processed"
+  reports_dir: "data/image_only_comparisons/s4/reports"
+  sky_xmatches_dir: "data/image_only_comparisons/s4/processed/Sky-CrossMatches"
+
+reference:
+  name: "CMC1_1787034555_1kS4"
+  ms_paths: []
+  images:
+    - &ref_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1787034555_cmc1_1kS4/images/1787034555_continuum_image_J2147-8132_IClean_PB.fits"
+
+tests:
+  - {name: "CMC2_1785567678_32kS4", ms_paths: [], images: [&test_32k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785567678_32kS4/images/1785567678_continuum_image_J2147-8132_IClean_PB.fits"]}
+  - {name: "CMC2_1785652878_8kS4", ms_paths: [], images: [&test_8k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_PB.fits"]}
+  - {name: "CMC2_1785659477_4kS4", ms_paths: [], images: [&test_4k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785659477_4kS4/images/1785659477_continuum_image_J2147-8132_IClean_PB.fits"]}
+
+casa:
+  scans: ""
+  lowband_hz: [2.676e9, 2.85e9]
+  highband_hz: [3.25e9, 3.455e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [2.676e9, 2.85e9]
+  highband_hz: [3.25e9, 3.455e9]
+  reference:
+    name: "CMC1_1787034555_1kS4"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1787034555_cmc1_1kS4/images/1787034555_continuum_image_J2147-8132_IClean.fits"
+    low_image: null
+    high_image: null
+  tests:
+    - {name: "CMC2_1785567678_32kS4", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785567678_32kS4/images/1785567678_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1785652878_8kS4", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1785659477_4kS4", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785659477_4kS4/images/1785659477_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+
+pybdsf: {thresh_isl: 3.5, thresh_pix: 5.0, freq_mhz: null, freq_hz: null, pblimit: 0.05, base_prefix: ""}
+xmatch: {max_sep_arcsec: 1.0, ra_col_1: "RA", dec_col_1: "DEC", ra_col_2: "RA", dec_col_2: "DEC", coord_frame: "icrs", one_to_many: false}
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs:
+    - [&ref_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1787034555_cmc1_1kS4/images/pybdsf.results/1787034555_continuum_image_J2147-8132_IClean_PB/1787034555_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &test_32k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785567678_32kS4/images/pybdsf.results/1785567678_continuum_image_J2147-8132_IClean_PB/1785567678_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_32k "data/image_only_comparisons/s4/processed/Sky-CrossMatches/1787034555_CMC1_X_1785567678_32kS4_mfs.fits"]
+    - [*ref_catalog,
+       &test_8k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785652878_8kS4/images/pybdsf.results/1785652878_continuum_image_J2147-8132_IClean_PB/1785652878_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_8k "data/image_only_comparisons/s4/processed/Sky-CrossMatches/1787034555_CMC1_X_1785652878_8kS4_mfs.fits"]
+    - [*ref_catalog,
+       &test_4k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785659477_4kS4/images/pybdsf.results/1785659477_continuum_image_J2147-8132_IClean_PB/1785659477_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_4k "data/image_only_comparisons/s4/processed/Sky-CrossMatches/1787034555_CMC1_X_1785659477_4kS4_mfs.fits"]
+  positions:
+    - {xmatch_table: *xmatch_32k, ref_fits: *ref_image, other_fits: *test_32k_image, otherdatatag: "1785567678_32kS4"}
+    - {xmatch_table: *xmatch_8k, ref_fits: *ref_image, other_fits: *test_8k_image, otherdatatag: "1785652878_8kS4"}
+    - {xmatch_table: *xmatch_4k, ref_fits: *ref_image, other_fits: *test_4k_image, otherdatatag: "1785659477_4kS4"}
+  flux: {}

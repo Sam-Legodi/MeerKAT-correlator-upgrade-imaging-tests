@@ -1,0 +1,68 @@
+project_name: "MeerKAT-correlator-upgrade-imaging-tests"
+
+# U-band delivered-image comparisons. Of the available CMC1 4kU/32kU images,
+# 1785990374 4kU is used because its supplied RMS map has the lower sampled
+# median noise and 4k is closer to both test channel modes.
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/image_only_comparisons/u/interim"
+  processed_dir: "data/image_only_comparisons/u/processed"
+  reports_dir: "data/image_only_comparisons/u/reports"
+  sky_xmatches_dir: "data/image_only_comparisons/u/processed/Sky-CrossMatches"
+
+reference:
+  name: "CMC1_1785990374_4kU"
+  ms_paths: []
+  images:
+    - &ref_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785990374_cmc1_4kU/images/1785990374_continuum_image_J2147-8132_IClean_PB.fits"
+
+tests:
+  - name: "CMC2_1784017048_1kU"
+    ms_paths: []
+    images:
+      - &test_1k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784017048_1kU/images/1784017048_continuum_image_J2147-8132_IClean_PB.fits"
+  - name: "CMC2_1784022889_8kU"
+    ms_paths: []
+    images:
+      - &test_8k_image "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784022889_8kU/images/1784022889_continuum_image_J2147-8132_IClean_PB.fits"
+
+casa:
+  scans: ""
+  lowband_hz: [5.74e8, 7.00e8]
+  highband_hz: [9.00e8, 1.037e9]
+  field: "J2147-8132"
+  datacolumn: "corrected"
+  image_scans: false
+
+low_high_slice:
+  enabled: true
+  overwrite: false
+  add_to_source_finding: true
+  lowband_hz: [5.74e8, 7.00e8]
+  highband_hz: [9.00e8, 1.037e9]
+  reference:
+    name: "CMC1_1785990374_4kU"
+    cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785990374_cmc1_4kU/images/1785990374_continuum_image_J2147-8132_IClean.fits"
+    low_image: null
+    high_image: null
+  tests:
+    - {name: "CMC2_1784017048_1kU", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784017048_1kU/images/1784017048_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+    - {name: "CMC2_1784022889_8kU", cuboid: "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784022889_8kU/images/1784022889_continuum_image_J2147-8132_IClean.fits", low_image: null, high_image: null}
+
+pybdsf: {thresh_isl: 3.5, thresh_pix: 5.0, freq_mhz: null, freq_hz: null, pblimit: 0.05, base_prefix: ""}
+xmatch: {max_sep_arcsec: 1.0, ra_col_1: "RA", dec_col_1: "DEC", ra_col_2: "RA", dec_col_2: "DEC", coord_frame: "icrs", one_to_many: false}
+
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs:
+    - [&ref_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785990374_cmc1_4kU/images/pybdsf.results/1785990374_continuum_image_J2147-8132_IClean_PB/1785990374_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &test_1k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784017048_1kU/images/pybdsf.results/1784017048_continuum_image_J2147-8132_IClean_PB/1784017048_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_1k "data/image_only_comparisons/u/processed/Sky-CrossMatches/1785990374_CMC1_X_1784017048_1kU_mfs.fits"]
+    - [*ref_catalog,
+       &test_8k_catalog "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1784022889_8kU/images/pybdsf.results/1784022889_continuum_image_J2147-8132_IClean_PB/1784022889_continuum_image_J2147-8132_IClean_PB-source-cat.fits",
+       &xmatch_8k "data/image_only_comparisons/u/processed/Sky-CrossMatches/1785990374_CMC1_X_1784022889_8kU_mfs.fits"]
+  positions:
+    - {xmatch_table: *xmatch_1k, ref_fits: *ref_image, other_fits: *test_1k_image, otherdatatag: "1784017048_1kU"}
+    - {xmatch_table: *xmatch_8k, ref_fits: *ref_image, other_fits: *test_8k_image, otherdatatag: "1784022889_8kU"}
+  flux: {}
