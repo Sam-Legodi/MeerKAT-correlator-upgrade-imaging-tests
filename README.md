@@ -416,7 +416,7 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 
 ---
 
-### 8) Commit your config and results?
+### 8) For dev purposes: Commit your config and results?
 
 * Commit `configs/example_local.yaml` (sanitised), but avoid committing personal `config.yaml` files with private paths.
 * Do not commit bulky products unless you have Git LFS set up; prefer a tiny demo under `examples/tiny-demo/`.
