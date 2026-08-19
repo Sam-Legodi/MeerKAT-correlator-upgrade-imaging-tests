@@ -1,20 +1,42 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import yaml
+
+SLICE_PATH_FIELDS = ("cuboid", "low_image", "high_image")
 
 @dataclass
 class Target:
     name: str
     ms_paths: List[str] = field(default_factory=list)
     images: List[str] = field(default_factory=list)
+    cuboid: Optional[str] = None
+    low_image: Optional[str] = None
+    high_image: Optional[str] = None
+
+@dataclass
+class FrequencyRangesCfg:
+    lowband_hz: List[float] = field(default_factory=lambda: [8.98e8, 1.00e9])
+    highband_hz: List[float] = field(default_factory=lambda: [1.46e9, 1.70e9])
 
 @dataclass
 class CasaCfg:
     scans: str = ""
-    lowband_hz: List[float] = field(default_factory=lambda: [8.98e8, 1.00e9])
-    highband_hz: List[float] = field(default_factory=lambda: [1.46e9, 1.70e9])
+    lowband_hz: Optional[List[float]] = None
+    highband_hz: Optional[List[float]] = None
+    field: str = "J2147-8132"
+    datacolumn: str = "DATA"
+    image_scans: bool = True
+
+@dataclass
+class LowHighSliceCfg:
+    enabled: bool = False
+    overwrite: bool = False
+    add_to_source_finding: bool = True
+    lowband_hz: Optional[List[float]] = None
+    highband_hz: Optional[List[float]] = None
 
 @dataclass
 class PyBDSFCfg:
@@ -50,10 +72,94 @@ class Config:
     paths: PathsCfg = field(default_factory=PathsCfg)
     reference: Target = field(default_factory=lambda: Target(name="reference"))
     tests: List[Target] = field(default_factory=list)
+    frequency_ranges: FrequencyRangesCfg = field(default_factory=FrequencyRangesCfg)
     casa: CasaCfg = field(default_factory=CasaCfg)
+    low_high_slice: LowHighSliceCfg = field(default_factory=LowHighSliceCfg)
     pybdsf: PyBDSFCfg = field(default_factory=PyBDSFCfg)
     xmatch: XMatchCfg = field(default_factory=XMatchCfg)
     extra: Dict[str, Any] = field(default_factory=dict)
+
+def _frequency_range(values: Any, label: str) -> List[float]:
+    if not isinstance(values, (list, tuple)) or len(values) != 2:
+        raise ValueError(f"{label} must contain exactly two frequencies")
+    frequencies = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in frequencies):
+        raise ValueError(f"{label} must contain finite frequencies")
+    if frequencies[0] >= frequencies[1]:
+        raise ValueError(f"{label} must be increasing")
+    return frequencies
+
+def _shared_frequency_ranges(
+    raw: Dict[str, Any],
+    casa_raw: Dict[str, Any],
+    low_high_raw: Dict[str, Any],
+) -> FrequencyRangesCfg:
+    shared_raw = raw.get("frequency_ranges")
+    if shared_raw is not None:
+        missing = [
+            key for key in ("lowband_hz", "highband_hz") if key not in shared_raw
+        ]
+        if missing:
+            raise ValueError(
+                "frequency_ranges requires: " + ", ".join(missing)
+            )
+        source = shared_raw
+    elif all(key in low_high_raw for key in ("lowband_hz", "highband_hz")):
+        # Backward compatibility with the original step-specific schema.
+        source = low_high_raw
+    elif all(key in casa_raw for key in ("lowband_hz", "highband_hz")):
+        source = casa_raw
+    elif low_high_raw.get("enabled", False):
+        raise ValueError(
+            "Enabled low_high_slice requires frequency_ranges.lowband_hz and "
+            "frequency_ranges.highband_hz"
+        )
+    else:
+        return FrequencyRangesCfg()
+
+    return FrequencyRangesCfg(
+        lowband_hz=_frequency_range(source["lowband_hz"], "lowband_hz"),
+        highband_hz=_frequency_range(source["highband_hz"], "highband_hz"),
+    )
+
+def _step_frequency_override(
+    raw: Dict[str, Any],
+    key: str,
+    shared: List[float],
+    section: str,
+) -> Optional[List[float]]:
+    if key not in raw:
+        return None
+    values = _frequency_range(raw[key], f"{section}.{key}")
+    return None if values == shared else values
+
+def _target(
+    raw: Optional[Dict[str, Any]],
+    legacy_slice: Optional[Dict[str, Any]] = None,
+    default_name: str = "reference",
+) -> Target:
+    target_raw = dict(raw or {})
+    legacy_raw = dict(legacy_slice or {})
+    name = target_raw.get("name", default_name)
+    legacy_name = legacy_raw.get("name")
+    if legacy_name and legacy_name != name:
+        raise ValueError(
+            f"Legacy low_high_slice target name '{legacy_name}' does not match "
+            f"target name '{name}'"
+        )
+
+    slice_paths: Dict[str, Optional[str]] = {}
+    for key in SLICE_PATH_FIELDS:
+        if key in target_raw and key in legacy_raw and target_raw[key] != legacy_raw[key]:
+            raise ValueError(f"Conflicting {key} values for target '{name}'")
+        slice_paths[key] = target_raw.get(key, legacy_raw.get(key))
+
+    return Target(
+        name=name,
+        ms_paths=list(target_raw.get("ms_paths") or []),
+        images=list(target_raw.get("images") or []),
+        **slice_paths,
+    )
 
 def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
     paths = PathsCfg(**d.get("paths", {})) if "paths" in d else PathsCfg(
@@ -65,15 +171,68 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
     )
     top_level_extra = {k: v for k, v in d.items() if k not in {
         "project_name","out_root","paths","raw_dir","interim_dir","processed_dir","reports_dir",
-        "sky_xmatches_dir","reference","tests","casa","pybdsf","xmatch","extra"}}
+        "sky_xmatches_dir","reference","tests","frequency_ranges","casa","low_high_slice",
+        "pybdsf","xmatch","extra"}}
     merged_extra = {**(d.get("extra") or {}), **top_level_extra}
+    casa_raw = dict(d.get("casa") or {})
+    low_high_raw = d.get("low_high_slice") or {}
+    low_high_enabled = low_high_raw.get("enabled", False)
+    frequency_ranges = _shared_frequency_ranges(d, casa_raw, low_high_raw)
+
+    casa = CasaCfg(
+        scans=casa_raw.get("scans", ""),
+        lowband_hz=_step_frequency_override(
+            casa_raw, "lowband_hz", frequency_ranges.lowband_hz, "casa"
+        ),
+        highband_hz=_step_frequency_override(
+            casa_raw, "highband_hz", frequency_ranges.highband_hz, "casa"
+        ),
+        field=casa_raw.get("field", "J2147-8132"),
+        datacolumn=casa_raw.get("datacolumn", "DATA"),
+        image_scans=casa_raw.get("image_scans", True),
+    )
+    low_high_slice = LowHighSliceCfg(
+        enabled=low_high_enabled,
+        overwrite=low_high_raw.get("overwrite", False),
+        add_to_source_finding=low_high_raw.get("add_to_source_finding", True),
+        lowband_hz=_step_frequency_override(
+            low_high_raw, "lowband_hz", frequency_ranges.lowband_hz, "low_high_slice"
+        ),
+        highband_hz=_step_frequency_override(
+            low_high_raw, "highband_hz", frequency_ranges.highband_hz, "low_high_slice"
+        ),
+    )
+
+    legacy_tests: Dict[str, Dict[str, Any]] = {}
+    for entry in low_high_raw.get("tests", []):
+        name = entry.get("name")
+        if not name:
+            raise ValueError("Each legacy low_high_slice tests entry requires a name")
+        if name in legacy_tests:
+            raise ValueError(f"Duplicate legacy low_high_slice test name: {name}")
+        legacy_tests[name] = entry
+
+    tests = [
+        _target(test_raw, legacy_tests.pop(test_raw.get("name"), None), default_name="")
+        for test_raw in d.get("tests", [])
+    ]
+    if legacy_tests:
+        raise ValueError(
+            "Legacy low_high_slice test(s) have no matching tests[].name entry: "
+            + ", ".join(sorted(legacy_tests))
+        )
+
     cfg = Config(
         project_name=d["project_name"],
         out_root=d.get("out_root", "data"),
         paths=paths,
-        reference=Target(**d.get("reference", {"name": "reference"})),
-        tests=[Target(**t) for t in d.get("tests", [])],
-        casa=CasaCfg(**d.get("casa", {})),
+        reference=_target(
+            d.get("reference"), low_high_raw.get("reference"), default_name="reference"
+        ),
+        tests=tests,
+        frequency_ranges=frequency_ranges,
+        casa=casa,
+        low_high_slice=low_high_slice,
         pybdsf=PyBDSFCfg(**d.get("pybdsf", {})),
         xmatch=XMatchCfg(**d.get("xmatch", {})),
         extra=merged_extra,
