@@ -36,7 +36,6 @@ This repository standardizes the end-to-end process and makes it easy to share r
 * [Legacy Scripts](#legacy-scripts)
 * [Development Practices](#development-practices)
 * [Contributing](#contributing)
-* [License](#license)
 * [Citation](#citation)
 
 ---
@@ -247,6 +246,28 @@ Edit `config.yaml` (see contents of `configs/example*_local.yaml config.yaml`):
 
 You can keep multiple configs (for example, one per dataset) and pass `--config path/to.yaml` to each command.
 
+When many paths share directories, define composable values once under
+`path_vars` and reference them as `${name}` anywhere else in the config. Path
+variables may reference earlier or later path variables. Continue to use YAML
+anchors for complete paths that are reused unchanged:
+
+```yaml
+path_vars:
+  commissioning: "/data/GPU_Correlator_Commissioning"
+  observations: "${commissioning}/Obsevations"
+  ref_images: "${observations}/reference/images"
+  ref_stem: "1785941476_continuum_image_J2147-8132_IClean"
+
+reference:
+  images:
+    - &ref_image "${ref_images}/${ref_stem}_PB.fits"
+  cuboid: "${ref_images}/${ref_stem}.fits"
+
+extra:
+  positions:
+    - {ref_fits: *ref_image}
+```
+
 **`config.yaml` scaffold (excerpt):**
 
 ```yaml
@@ -279,6 +300,9 @@ low_high_slice:
   enabled: true
   overwrite: false
   add_to_source_finding: true
+
+pybdsf:
+  overwrite: false
 
 extra:
   xmatch_pairs: []
@@ -371,6 +395,8 @@ What happens:
 * Collects images from `reference.images`, each test `images`, resolved
   low/high slice products, and any `extra.images_globs`.
 * Runs `python -m meerkat_corr_imaging.pybdsf_srcfind --images ... [--isl ... --pix ... --freq-* ...]`.
+* Reuses inputs whose FITS and ASCII PyBDSF catalogues already exist. Set
+  `pybdsf.overwrite: true` to run source finding again and replace them.
 * if input images do not have frequency information in their headers, run this step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section.
 * PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
 
@@ -430,6 +456,34 @@ Outputs:
 ---
 
 ### 4) Run the whole pipeline (hands-off)
+
+To run only the image-domain stages, use `images`:
+
+```bash
+python -m meerkat_corr_imaging.cli images --config config.yaml
+```
+
+This mode runs exactly:
+
+1. `low_high_slice`
+2. `src`
+3. `xm`
+4. `pos`
+5. `flux`
+
+Before the first step, it builds a deterministic product plan. Low/high slice
+images are included in source finding; each image's expected PyBDSF FITS
+catalogue is included in cross-matching; generated cross-match tables are
+included in position analysis; and each test with low, high and MFS tables is
+included in flux analysis. Existing `extra.xmatch_pairs`, `extra.positions`
+and `extra.flux` entries are preserved, and the planner fills in missing
+reference/test band pairs.
+
+A single `reference.images` or `tests[].images` entry is treated as that
+target's MFS image. If a target has multiple arbitrary full-band images, the
+planner pairs them by configuration order but does not guess which one is the
+MFS input required by flux analysis; configure those downstream handoffs
+explicitly in that case.
 
 If you have filled the config for every step:
 
@@ -519,6 +573,7 @@ python -m meerkat_corr_imaging.cli xm   --config config.yaml
 python -m meerkat_corr_imaging.cli pos  --config config.yaml
 python -m meerkat_corr_imaging.cli flux --config config.yaml
 # or
+python -m meerkat_corr_imaging.cli images --config config.yaml  # image-domain only
 python -m meerkat_corr_imaging.cli all  --config config.yaml
 ```
 
@@ -598,11 +653,6 @@ Historical code is preserved (read-only) under **`legacy scripts/`**. This keeps
 4. Push and open a Pull Request for review.
 
 For large artifacts, prefer small demo files and reproducible steps over committing entire datasets.
-
----
-
-## License
-
 
 ---
 
