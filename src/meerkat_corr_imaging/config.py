@@ -2,10 +2,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
+import re
 from typing import List, Optional, Dict, Any
 import yaml
 
 SLICE_PATH_FIELDS = ("cuboid", "low_image", "high_image")
+PATH_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 @dataclass
 class Target:
@@ -46,6 +48,8 @@ class PyBDSFCfg:
     freq_hz: Optional[float] = None
     pblimit: Optional[float] = None
     base_prefix: Optional[str] = None
+    adaptive_rms_box: bool = True
+    overwrite: bool = False
 
 @dataclass
 class XMatchCfg:
@@ -78,6 +82,61 @@ class Config:
     pybdsf: PyBDSFCfg = field(default_factory=PyBDSFCfg)
     xmatch: XMatchCfg = field(default_factory=XMatchCfg)
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+def _expand_path_vars(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand recursive ``${name}`` variables throughout a raw config."""
+    path_vars = raw.get("path_vars") or {}
+    if not isinstance(path_vars, dict):
+        raise ValueError("path_vars must be a mapping of names to strings")
+
+    definitions: Dict[str, str] = {}
+    for name, value in path_vars.items():
+        if not isinstance(name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", name
+        ):
+            raise ValueError(f"Invalid path_vars name: {name!r}")
+        if not isinstance(value, str):
+            raise ValueError(f"path_vars.{name} must be a string")
+        definitions[name] = value
+
+    resolved: Dict[str, str] = {}
+    resolving: List[str] = []
+
+    def resolve(name: str) -> str:
+        if name in resolved:
+            return resolved[name]
+        if name not in definitions:
+            raise ValueError(f"Undefined path variable: {name}")
+        if name in resolving:
+            cycle = " -> ".join([*resolving, name])
+            raise ValueError(f"Cyclic path_vars reference: {cycle}")
+
+        resolving.append(name)
+        try:
+            value = PATH_VAR_PATTERN.sub(
+                lambda match: resolve(match.group(1)), definitions[name]
+            )
+        finally:
+            resolving.pop()
+        resolved[name] = value
+        return value
+
+    for name in definitions:
+        resolve(name)
+
+    def expand(value: Any) -> Any:
+        if isinstance(value, str):
+            return PATH_VAR_PATTERN.sub(lambda match: resolve(match.group(1)), value)
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(expand(item) for item in value)
+        if isinstance(value, dict):
+            return {key: expand(item) for key, item in value.items()}
+        return value
+
+    return expand({key: value for key, value in raw.items() if key != "path_vars"})
 
 def _frequency_range(values: Any, label: str) -> List[float]:
     if not isinstance(values, (list, tuple)) or len(values) != 2:
@@ -162,6 +221,7 @@ def _target(
     )
 
 def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
+    d = _expand_path_vars(d)
     paths = PathsCfg(**d.get("paths", {})) if "paths" in d else PathsCfg(
         raw_dir=d.get("raw_dir", "data/raw"),
         interim_dir=d.get("interim_dir", "data/interim"),
