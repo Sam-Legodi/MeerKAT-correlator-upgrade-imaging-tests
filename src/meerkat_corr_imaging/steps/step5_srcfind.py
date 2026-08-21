@@ -49,5 +49,12 @@ def run(cfg: Config):
         cmd += ["--freq-mhz", str(cfg.pybdsf.freq_mhz)]
     if cfg.pybdsf.base_prefix:
         cmd += ["--base-prefix", cfg.pybdsf.base_prefix]
+    cmd.append(
+        "--adaptive-rms-box"
+        if cfg.pybdsf.adaptive_rms_box
+        else "--no-adaptive-rms-box"
+    )
+    if cfg.pybdsf.overwrite:
+        cmd.append("--overwrite")
 
     _run(cmd, inputs=images)

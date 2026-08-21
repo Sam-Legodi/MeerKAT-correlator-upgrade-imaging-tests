@@ -134,3 +134,32 @@ def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -
     assert commands[2][commands[2].index("-c") + 1].endswith("tclean_two_bands.py")
     assert commands[1][-1] == "reference.ms"
     assert commands[2][-1] == "test.ms"
+
+
+def test_flux_step_runs_each_chained_analysis(tmp_path: Path, monkeypatch) -> None:
+    cfg = _config(tmp_path)
+    cfg.extra["flux"] = [
+        {
+            "ref_low_xmatch": "test-a-low.fits",
+            "ref_high_xmatch": "test-a-high.fits",
+            "ref_mfs_xmatch": "test-a-mfs.fits",
+        },
+        {
+            "ref_low_xmatch": "test-b-low.fits",
+            "ref_high_xmatch": "test-b-high.fits",
+            "ref_mfs_xmatch": "test-b-mfs.fits",
+        },
+    ]
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        step7_flux,
+        "_run",
+        lambda cmd, **kwargs: commands.append(list(cmd)),
+    )
+
+    step7_flux.run(cfg)
+
+    assert len(commands) == 2
+    assert commands[0][2] == "meerkat_corr_imaging.flux_analysis"
+    assert "test-a-mfs.fits" in commands[0]
+    assert "test-b-mfs.fits" in commands[1]

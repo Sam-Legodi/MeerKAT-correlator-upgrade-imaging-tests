@@ -230,9 +230,10 @@ def test_pybdsf_uses_unambiguous_frequency_parameter(tmp_path: Path, monkeypatch
         return FakeImage()
 
     monkeypatch.setitem(sys.modules, "bdsf", SimpleNamespace(process_image=process_image))
-    find_sources(str(image), base="image")
+    find_sources(str(image), base="image", adaptive_rms_box=False)
 
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["frequency"] == 123.0e6
     assert "freq" not in kwargs
+    assert kwargs["adaptive_rms_box"] is False

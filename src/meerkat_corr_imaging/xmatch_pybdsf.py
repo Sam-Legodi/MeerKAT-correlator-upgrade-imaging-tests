@@ -402,23 +402,66 @@ def cross_match_catalogues(
 
     return match_table, matches
 
-def sanitize_fits_meta(tab, limit=68):
+FITS_CARD_LENGTH = 80
+FITS_HISTORY_VALUE_LENGTH = 70
+
+
+def _fits_meta_card_fits(keyword: str, value: object) -> bool:
+    """Return whether a metadata item serializes to one FITS card."""
+
+    try:
+        image = fits.Card(keyword, value).image
+    except (TypeError, ValueError):
+        return False
+    return len(image) <= FITS_CARD_LENGTH
+
+
+def _history_chunks(keyword: str, value: object) -> List[str]:
+    """Preserve a removed metadata item in FITS-safe HISTORY records."""
+
+    label = keyword.removeprefix("HIERARCH ")
+    text = f"{label}={value}"
+    return [
+        text[start : start + FITS_HISTORY_VALUE_LENGTH]
+        for start in range(0, len(text), FITS_HISTORY_VALUE_LENGTH)
+    ] or [f"{label}="]
+
+
+def sanitize_fits_meta(tab: Table) -> Table:
+    """Make table metadata safe for FITS output without losing provenance."""
+
     tab = tab.copy(copy_data=False)
-    for k, v in list(tab.meta.items()):
-        if isinstance(v, str) and len(v) > limit:
-            # try shortening known long path-like keys to basenames
-            if k.endswith("_INIMAGE") or k.endswith("_CATALOG") or "/" in v or "\\" in v:
-                short = os.path.basename(v)
-                if len(short) <= limit:
-                    tab.meta[k] = short
-                    continue
-            # otherwise, move the info to HISTORY and drop the key
-            hist = tab.meta.get("HISTORY", [])
-            if isinstance(hist, str):
-                hist = [hist]
-            hist.append(f"{k}={v[:limit]} ... (truncated)")
-            tab.meta["HISTORY"] = hist
-            del tab.meta[k]
+    existing_history = tab.meta.get("HISTORY", [])
+    if isinstance(existing_history, str):
+        history = [existing_history]
+    else:
+        history = list(existing_history or [])
+
+    moved_to_history = False
+    for keyword, value in list(tab.meta.items()):
+        if keyword in {"HISTORY", "COMMENT"}:
+            continue
+        if _fits_meta_card_fits(keyword, value):
+            continue
+
+        # Preserve a structured card where a long path can be shortened enough.
+        if isinstance(value, str) and (
+            keyword.endswith("_INIMAGE")
+            or keyword.endswith("_CATALOG")
+            or "/" in value
+            or "\\" in value
+        ):
+            basename = os.path.basename(value)
+            if basename != value and _fits_meta_card_fits(keyword, basename):
+                tab.meta[keyword] = basename
+                continue
+
+        history.extend(_history_chunks(keyword, value))
+        del tab.meta[keyword]
+        moved_to_history = True
+
+    if moved_to_history or existing_history:
+        tab.meta["HISTORY"] = history
     return tab
 
 
