@@ -603,16 +603,15 @@ For large artifacts, prefer small demo files and reproducible steps over committ
 
 ## License
 
-Add your license of choice (e.g., MIT, BSD-3-Clause) in `LICENSE`.
 
 ---
 
 ## Citation
 
-If this work contributes to published research, please cite the repository. Add a `CITATION.cff` file if you want formal citation metadata.
+If this work contributes to published research, please cite the repository.
 
 ```
-@misc{MeerKAT_corr_upgrade_imaging_tests,
+@misc{MeerKAT-Correlator-Imaging-Tests,
   author       = {Legodi, L. S and collaborators},
   title        = {MeerKAT Correlator Upgrade — Imaging Tests},
   year         = {2025},
