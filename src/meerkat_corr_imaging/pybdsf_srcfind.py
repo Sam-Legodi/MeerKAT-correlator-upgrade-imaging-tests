@@ -283,6 +283,7 @@ def find_sources(
     fluxthreshold: float = 1.0e-6,
     pblimit: float = 0.05,
     freq_hz: Optional[float] = None,
+    adaptive_rms_box: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[str, str]:
     """
@@ -401,7 +402,7 @@ def find_sources(
             thresh="hard",
             thresh_isl=float(isl_thresh),
             thresh_pix=float(pix_thresh),
-            adaptive_rms_box=True,
+            adaptive_rms_box=bool(adaptive_rms_box),
         )
         if not wrote_temp:
             # PyBDSF allows unique parameter abbreviations, but `freq` is
@@ -543,6 +544,21 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--adaptive-rms-box",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use PyBDSF's adaptive RMS-box scheme (default: enabled). "
+            "Disable with --no-adaptive-rms-box if adaptive sigma clipping "
+            "fails on an image."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Rerun source finding even when both output catalogues already exist.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="List the images that would be processed and exit.",
@@ -591,6 +607,16 @@ def compute_base_name(stem: str, prefix: Optional[str]) -> str:
     return base[:120]
 
 
+def catalogue_paths(image_path: str, base: str) -> Tuple[Path, Path]:
+    """Return the FITS and ASCII catalogue paths produced for an image."""
+    image = Path(image_path)
+    outdir = image.parent / "pybdsf.results" / base
+    return (
+        outdir / f"{base}-source-cat.fits",
+        outdir / f"{base}-source-cat.txt",
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
@@ -617,9 +643,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     exit_code = 0
     for image_path in ordered_paths:
-        freq_hz = determine_frequency(image_path, freq_overrides, args)
         stem = os.path.splitext(os.path.basename(image_path))[0]
         base = compute_base_name(stem, args.base_prefix)
+        existing_catalogues = catalogue_paths(image_path, base)
+
+        if not args.overwrite and all(path.is_file() for path in existing_catalogues):
+            print(
+                "Skipping {} -> existing PyBDSF catalogues in {}".format(
+                    image_path, existing_catalogues[0].parent
+                )
+            )
+            continue
+
+        freq_hz = determine_frequency(image_path, freq_overrides, args)
 
         try:
             outdir, log_path = find_sources(
@@ -631,6 +667,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 fluxthreshold=args.flux,
                 pblimit=args.pblimit,
                 freq_hz=freq_hz,
+                adaptive_rms_box=args.adaptive_rms_box,
             )
             print("Completed {} -> outputs in {} (log: {})".format(image_path, outdir, log_path))
         except Exception as exc:
