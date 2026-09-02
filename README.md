@@ -25,6 +25,7 @@ This repository standardizes the end-to-end process and makes it easy to share r
     * [3.5 Cross-matching catalogues (Step 6)](#35-cross-matching-catalogues-step-6)
     * [3.6 Astrometry (positions) analysis (Step 7a)](#36-astrometry-positions-analysis-step-7a)
     * [3.7 Flux analysis (Step 7b)](#37-flux-analysis-step-7b)
+    * [3.8 Consolidated verification report (Step 8)](#38-consolidated-verification-report-step-8)
   * [4) Run the whole pipeline (hands-off)](#4-run-the-whole-pipeline-hands-off)
   * [5) Where things go (default)](#5-where-things-go-default)
   * [6) Quick verification checklist](#6-quick-verification-checklist)
@@ -50,7 +51,7 @@ This repository standardizes the end-to-end process and makes it easy to share r
 4. Running PyBDSF for source catalogues,
 5. Cross-matching test vs reference catalogues,
 6. Analyzing astrometric offsets and flux consistency, and
-7. Producing ready-to-share figures and DOCX reports.
+7. Producing ready-to-share figures, per-analysis DOCX files and a consolidated verification report.
 
 ---
 
@@ -88,11 +89,13 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │     ├─ config.py              # config loading/validation helpers
 │     ├─ flux_analysis.py       # flux comparison and report module
 │     ├─ low_high_slice.py      # installable low/high cuboid extractor
+│     ├─ output_paths.py        # common output naming helpers
 │     ├─ positions_analysis.py  # astrometric analysis module
 │     ├─ pybdsf_srcfind.py      # PyBDSF launcher module
 │     ├─ standalone_xxyy_solve.py # packaged CASA calibration script
 │     ├─ tclean_two_bands.py    # packaged CASA imaging script
 │     ├─ vis_amp_analyze.py     # visibility QA module
+│     ├─ verification_report.py # consolidated image-domain verification report
 │     ├─ xmatch_pybdsf.py       # catalogue matching module
 │     └─ steps/
 │        ├─ step1_archive_docs.py     # documentation helpers (no code execution)
@@ -102,7 +105,8 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │        ├─ step5_srcfind.py          # wraps pybdsf_srcfind.py
 │        ├─ step6_xmatch.py           # wraps xmatch_pybdsf.py
 │        ├─ step7_positions.py        # wraps positions analysis
-│        └─ step7_flux.py             # wraps flux notebook export
+│        ├─ step7_flux.py             # wraps flux notebook export
+│        └─ step8_verification_report.py # builds the consolidated report
 ├─ scripts/                     # backward-compatible thin entrypoints
 │  ├─ vis_amp_analyze.py
 │  ├─ standalone_xxyy_solve.py
@@ -435,7 +439,7 @@ What happens:
 
 Outputs:
 
-* Plots and DOCX files under `data/reports/crossmatched-positions/` (or wherever your script writes them).
+* Plots and `draft_*.docx` files under `data/reports/crossmatched-positions/` (or wherever your script writes them).
 
 #### 3.7 Flux analysis (Step 7b)
 
@@ -451,7 +455,33 @@ What happens:
 
 Outputs:
 
-* Plots and DOCX files under `data/reports/flux/` (or your configured location).
+* Plots and `draft_*.docx` files under `data/reports/flux/` (or your configured location).
+
+#### 3.8 Consolidated verification report (Step 8)
+
+```bash
+python -m meerkat_corr_imaging.cli report --config config.yaml
+```
+
+What happens:
+
+* Reads the MFS, low-band and high-band entries already wired through
+  `extra.positions` and the catalogue pairs in `extra.xmatch_pairs`.
+* Enforces like-for-like primary-beam correction states.
+* Scores positional p95, robust median integrated-flux error and the
+  measured/CMC1 robust-RMS ratio against the configured verification policy.
+* Adds the available calibration-report PDF inventory and image-diagnostic
+  figures, while marking visibility-only and per-scan checks as unassessed when
+  those inputs are unavailable.
+
+Outputs:
+
+* `data/reports/imaging_verification/draft_<observation>_imaging_verification.docx`
+* A matching `_metrics.json` sidecar and acceptance-metrics figure.
+
+Optional observation-specific visual findings can be supplied under
+`extra.verification_report` using `calibration_status`, `calibration_finding`,
+`image_status`, and `image_finding`.
 
 ---
 
@@ -470,14 +500,15 @@ This mode runs exactly:
 3. `xm`
 4. `pos`
 5. `flux`
+6. `report`
 
 Before the first step, it builds a deterministic product plan. Low/high slice
 images are included in source finding; each image's expected PyBDSF FITS
 catalogue is included in cross-matching; generated cross-match tables are
 included in position analysis; and each test with low, high and MFS tables is
-included in flux analysis. Existing `extra.xmatch_pairs`, `extra.positions`
-and `extra.flux` entries are preserved, and the planner fills in missing
-reference/test band pairs.
+included in flux analysis and the consolidated report. Existing
+`extra.xmatch_pairs`, `extra.positions` and `extra.flux` entries are preserved,
+and the planner fills in missing reference/test band pairs.
 
 A single `reference.images` or `tests[].images` entry is treated as that
 target's MFS image. If a target has multiple arbitrary full-band images, the
@@ -500,6 +531,7 @@ Order:
 5. `xm`
 6. `pos`
 7. `flux`
+8. `report`
 
 Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
 
@@ -520,6 +552,7 @@ command still stops before downstream steps when the completed step is failed.
 * Processed products (images, catalogues, cross-matches): `data/processed/...`
   * Cross-matches specifically: `data/processed/Sky-CrossMatches/`
 * Reports (DOCX, figures): `data/reports/...`
+  * Every pipeline-generated DOCX basename starts with `draft_`.
   * Per-step pipeline logs and audits: `data/reports/pipeline_audits/*.log`
 
 You can change these in `config.yaml -> paths.*`. Directories are created automatically.
@@ -533,7 +566,8 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 * After `low_high_slice`: non-PB `_lowband.fits` and `_highband.fits` beside each cuboid
 * After `src`: PyBDSF catalogues (FITS) near images or in `data/processed/`
 * After `xm`: matched FITS tables in `data/processed/Sky-CrossMatches/`
-* After `pos` and `flux`: DOCX files plus plots under `data/reports/`
+* After `pos` and `flux`: `draft_*.docx` files plus plots under `data/reports/`
+* After `report`: a five-page draft verification DOCX, JSON metrics sidecar and acceptance figure under `data/reports/imaging_verification/`
 
 ---
 

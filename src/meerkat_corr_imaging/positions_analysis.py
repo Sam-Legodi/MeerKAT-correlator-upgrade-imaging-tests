@@ -62,6 +62,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from matplotlib.patches import Ellipse  # NEW: for enclosing ellipses
 
+from .output_paths import draft_docx_path
+
 
 def safe_div(a, b, default=np.nan):
     try:
@@ -184,6 +186,31 @@ def _docx_add_heading(doc, text, level=1):
 def _docx_add_caption(doc, text):
     doc.add_paragraph(text)
     return
+
+
+PB_CORRECTION_CAUTION = (
+    "Astrometric analyses should compare like-for-like catalogues: PB-corrected "
+    "with PB-corrected, or non-PB-corrected with non-PB-corrected. PB correction "
+    "does not change true source positions, but mixing correction states changes "
+    "field-angle-dependent uncertainties and can introduce or amplify apparent "
+    "2φ (quadrupolar) structure in ΔRA/ΔDec versus φ."
+)
+
+THETA_UNIFORMITY_CAUTION = (
+    "An apparently uniform θ distribution is not necessarily benign. Large or "
+    "field-angle-dependent ρ/Bmaj values indicate substantial isotropic errors "
+    "or direction-dependent S/N or beam effects, even when no preferred offset "
+    "angle is evident."
+)
+
+
+def _docx_add_caution(doc, text):
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.keep_together = True
+    label = paragraph.add_run("Caution: ")
+    label.bold = True
+    paragraph.add_run(text)
+    return paragraph
 
 
 def _set_table_borders(table, width_pt=1.0, color="000000"):
@@ -367,7 +394,7 @@ def pos_varCMC1xCMC2(
     Uses BMAJ/BMIN and CRPIX from the reference FITS header.
 
     In addition to plots, writes a DOCX report:
-      - saved into 'crossmatched-positions/ref_x_<basename(other_fits)>.docx'
+      - saved into 'crossmatched-positions/draft_ref_x_<basename(other_fits)>.docx'
       - includes plots, a summary table, and physical interpretations.
 
     Returns a dict with figure paths, output dir, and summary arrays.
@@ -411,7 +438,7 @@ def pos_varCMC1xCMC2(
     phi1_deg = np.degrees(np.arctan2(y1 - y0, x1 - x0)) # east of north (i.e. +x = 0°, +y = 90°) pix polar angle for ref catalogue
     phi2_deg = np.degrees(np.arctan2(y2 - y0, x2 - x0)) # east of north pix polar angle for test/cmc2 catalogue (uses ref CRPIX)
 
-    # sky offsets & theta (uses your RA_Dec_offsets)
+    # Sky offsets and theta, using RA_Dec_offsets.
     Dra_arcsec, Ddec_arcsec = RA_Dec_offsets(ra1, dec1, ra2, dec2)
     theta_deg = np.degrees(np.arctan2(Ddec_arcsec, Dra_arcsec))
 
@@ -464,7 +491,7 @@ def pos_varCMC1xCMC2(
         f"  r = {circ_theta['r']:.3f} (0 ⇒ uniform, 1 ⇒ aligned)",
         f"  mean θ = {circ_theta['mean_deg']:.1f}° east of north",
         f"  Rayleigh p = {circ_theta['p']:.3g} ({rayleigh_label})",
-        "  Pair this with ρ/Bmaj spread to gauge directional systematics.",
+        "  The ρ/Bmaj spread provides complementary evidence for directional systematics.",
     ])
     rho_stats_line = (
         f"ρ/Bmaj stats → median={rho_stats['median']:.3g}, P84={rho_stats['p84']:.3g}."
@@ -483,7 +510,9 @@ def pos_varCMC1xCMC2(
         outdir = _ensure_dir(os.path.dirname(other_fits_path)+"/crossmatched-positions")
     
     base_other_full = os.path.basename(xmatch_table_path).replace(".fits", "")
-    report_docx = os.path.join(outdir, f"{base_ref}_x_{base_other_full}_astrometry.docx")
+    report_docx = draft_docx_path(
+        os.path.join(outdir, f"{base_ref}_x_{base_other_full}_astrometry.docx")
+    )
 
     fig1 = os.path.join(outdir, f"DRA-vs-phi-{base_ref}x{base_other}.png")
     fig2 = os.path.join(outdir, f"DDEC-vs-phi-{base_ref}x{base_other}.png")
@@ -586,20 +615,17 @@ def pos_varCMC1xCMC2(
         doc.add_paragraph(f"Cross-match table: {os.path.basename(xmatch_table_path)}")
 
     # Add plots with captions + physical interpretations
-    for fp, cap, interp in [
+    for fp, cap, interp, caution in [
         (
             fig1,
             "Figure 1: ΔRA/Bmaj vs pixel angle φ for reference (red, φ₁) and other (black, φ₂); ellipses show scatter and 'x' marks mean.",
-            "φ is the position angle of each matched source around the image centre. If ΔRA wiggles with φ, the calibration is direction dependent "
-            "(think beam squint, pointing, residual w-term). Quadrupole → "
-            f"{quad_summary_dra}. We fit sin/cos terms up to 2φ; the a2/b2 pair measure how strong the four-lobed pattern is, and ΔR² tells how much "
-            "extra variance those terms explain (≈0.05 is modest & ≥0.10 is clear. Bigger ΔR² ⇒ stronger, real 2φ structure. Pro tip"
-            "Pro tip: Make the playing field symmetric: cross-match PB-corr ↔ PB-corr (or non-PB ↔ non-PB). Consistency beats cleverness here."
-            "-- mixing a PB-corrected catalogue with a non-PB-corrected one doesn’t change the true sky positions, "
-            "but it changes the way errors breathe with field angle. That mismatch can invent or amplify "
-            "2φ (quadrupolar) structure in your ΔRA/ΔDec vs φ diagnostics—even if the sky is innocent.\n"
-            "NB: One φ origin/ref pixel coord to diagnose direction-dependent effects relative to one field center "
-            " (your reference beam, which you also use for Bmaj normalization -- i.e. φ₁ and φ₂ both use the reference image CRPIX)."
+            "φ is the position angle of each matched source around the image centre. A smooth ΔRA trend with φ indicates direction-dependent "
+            "calibration effects, such as beam squint, pointing error, or a residual w-term. Quadrupole summary: "
+            f"{quad_summary_dra} The diagnostic fits sine and cosine terms through 2φ; the a2/b2 pair measures the strength of the four-lobed pattern, "
+            "and ΔR² quantifies the additional variance explained by the quadrupolar terms (values near 0.05 indicate modest evidence; values at or "
+            "above 0.10 indicate clear evidence). Reference convention: φ₁ and φ₂ both use the reference-image CRPIX as their origin, and Bmaj "
+            "normalisation uses the reference beam.",
+            PB_CORRECTION_CAUTION,
         ),
         (
             fig2,
@@ -607,17 +633,20 @@ def pos_varCMC1xCMC2(
             "Same diagnostic but now for Dec offsets. Smooth φ trends reveal field-angle distortions, while small ellipses mean the behaviour is stable across "
             "the footprint. Quadrupole → "
             f"{quad_summary_ddec}, interpreted exactly as above for ΔRA.",
+            None,
         ),
         (
             fig3,
             "Figure 3: ΔRA vs ΔDec in beam-major units with equal axes.",
             "Offsets plotted in synthesised-beam units. A centred, roughly circular cloud means noise-dominated astrometry; a displaced or stretched cloud "
             "flags a coherent shift or a preferred error direction.",
+            None,
         ),
         (
             fig4,
             "Figure 4: ΔRA vs ΔDec in arcseconds with equal axes.",
-            "Same scatter plot but in absolute arcseconds. Use this when comparing against specification numbers or external catalogues.",
+            "The same scatter plot is shown in absolute arcseconds to support comparison with specification limits or external catalogues.",
+            None,
         ),
         (
             fig5,
@@ -626,38 +655,38 @@ def pos_varCMC1xCMC2(
                 "θ is the bearing of each offset (east of north). If the points cluster, a single dominant shift is present; if θ varies with φ, "
                 "geometry-driven effects are active. Dividing by Bmaj simply keeps units consistent with the other plots. "
                 f"{theta_stats_line}\n{circular_stats_oneliner}\n"
-                "-- What you should hope to see (no dominant shift):\n Uniform θ distribution (no preferred angle), i.e., directionless noise. "
-                "Small offset magnitudes: ρ/Bmaj well below 1 — many pipelines aim for median(ρ/Bmaj) ≪ 0.1 for well-behaved astrometry. "
-                "No φ dependence: neither θ nor ρ/Bmaj changing with φ; your ellipses in the overlay plots should be compact and centred (the ‘x’ near the "
-                "origin of the cloud), with similar shapes across scans.\n"
-                "** When “random” isn’t entirely benign:** If θ looks uniform but ρ/Bmaj is large (or grows with φ), you’ve got isotropic but big errors—still "
-                "a problem, just not directionally biased. If θ looks random yet varies with φ (e.g., different scatter width at certain φ), that hints at "
-                "direction-dependent SNR/beam effects masking a weak preferred angle."
+                "Expected behaviour without a dominant shift: θ remains approximately uniform, ρ/Bmaj remains well below 1 (many pipelines target "
+                "median(ρ/Bmaj) ≪ 0.1 for well-behaved astrometry), neither θ nor ρ/Bmaj varies systematically with φ, and overlay ellipses remain "
+                "compact, centred, and consistent across scans."
             ),
+            THETA_UNIFORMITY_CAUTION,
         ),
         (
             fig6,
             "Figure 6: ρ/Bmaj vs pixel angle φ for reference (red) and other (black); ellipses show scatter and 'x' marks mean.",
             (
-                "ρ is the radial offset √(ΔRA²+ΔDec²). Normalising by Bmaj makes the metric dimensionless so you can read it in ‘fractions of a beam.’ If "
-                "ρ/Bmaj changes with φ you are seeing direction-dependent residuals; a displaced ellipse centre highlights a bias in the mean offset "
+                "ρ is the radial offset √(ΔRA²+ΔDec²). Normalising by Bmaj makes the metric dimensionless, so each value represents a fraction of the "
+                "synthesised beam. A change in ρ/Bmaj with φ indicates direction-dependent residuals; a displaced ellipse centre highlights a bias in the mean offset "
                 "strength. "
                 f"{rho_stats_line}"
             ),
+            None,
         ),
     ]:
         if os.path.exists(fp):
             doc.add_picture(fp, width=Inches(6.5))
             _docx_add_caption(doc, cap)
             doc.add_paragraph("Interpretation: " + interp)
+            if caution:
+                _docx_add_caution(doc, caution)
 
     doc.add_page_break()
     _docx_add_heading(doc, "Summary statistics of positional offsets", level=1)
     _docx_add_table(doc, stats_rows)
     _docx_add_caption(doc, "Table 1: Summary metrics for ΔRA and ΔDec computed from the cross-matched catalogue. "
-                      "the 16th and 84th percentiles are a robust, model-light way to say “about one sigma either "
-                      "side of the median” if the distribution is roughly symmetric. They’re handy because they "
-                      "don’t assume Gaussian noise but still map to familiar intuition.")
+                      "The 16th and 84th percentiles provide robust, model-light approximations to one standard "
+                      "deviation below and above the median for a roughly symmetric distribution, without assuming "
+                      "Gaussian noise.")
 
     doc.save(report_docx)
 
@@ -1052,7 +1081,7 @@ def analyze_ref_vs_other_with_optional_scans(
             overlay_entries = [
                 ('dra_phi_overlays',
                  "ΔRA / Bmaj vs φ with per-scan overlays. Color-matched ellipses enclose each dataset; 'x' marks the mean.",
-                 "Interpretation: Compare per-scan behavior of ΔRA across φ. Scans with larger horizontal ellipse width show more ΔRA spread; "
+                 "Interpretation: This view compares per-scan behaviour of ΔRA across φ. Scans with larger horizontal ellipse width show more ΔRA spread; "
                  "vertical extent reflects φ coverage/scatter. Differences between scan ellipses can indicate time-variable direction-dependent errors."),
                 ('ddec_phi_overlays',
                  "ΔDec / Bmaj vs φ with per-scan overlays. Color-matched ellipses enclose each dataset; 'x' marks the mean.",
@@ -1062,9 +1091,9 @@ def analyze_ref_vs_other_with_optional_scans(
                  "Interpretation: The 2D error cloud per scan in resolution units. Off-centered means imply per-scan registration shifts; anisotropic ellipses point to directional systematics."),
                 ('dra_ddec_arcsec_overlays',
                  "ΔRA vs ΔDec (arcsec) with per-scan overlays.",
-                 "Interpretation: Same as cbmaj but in arcsec for absolute context; helpful when comparing to external astrometric references."),
+                 "Interpretation: The arcsecond view provides absolute context for comparison with external astrometric references."),
                 ('theta_phi_overlays',
-                 "θ/Bmaj vs φ with per-scan overlays. (Note: θ/Bmaj is not dimensionless; retained for continuity.)",
+                 "θ/Bmaj vs φ with per-scan overlays. θ/Bmaj is not dimensionless and is retained for continuity.",
                  "Interpretation: Per-scan preferred offset directions. Clustering of means at a common θ suggests a stable direction of error; φ dependence signals field geometry effects."),
                 ('rho_phi_overlays',
                  "ρ/Bmaj vs φ with per-scan overlays. Color-matched ellipses enclose each dataset; 'x' marks the mean.",
