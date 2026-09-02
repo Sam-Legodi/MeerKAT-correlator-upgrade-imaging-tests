@@ -11,6 +11,7 @@ from .steps import (
     step6_xmatch,
     step7_positions,
     step7_flux,
+    step8_verification_report,
 )
 
 
@@ -22,9 +23,10 @@ STEP_RUNNERS = {
     "xm": ("step6_cross_matching", step6_xmatch.run),
     "pos": ("step7a_positions", step7_positions.run),
     "flux": ("step7b_flux", step7_flux.run),
+    "report": ("step8_verification_report", step8_verification_report.run),
 }
 ALL_STEPS = tuple(STEP_RUNNERS)
-IMAGE_STEPS = ("low_high_slice", "src", "xm", "pos", "flux")
+IMAGE_STEPS = ("low_high_slice", "src", "xm", "pos", "flux", "report")
 IMAGE_COMMANDS = {"images", "image", "image_all", "all_images"}
 
 
@@ -65,15 +67,16 @@ def main(argv=None):
     sub.add_parser("xm",  help="Run cross-matching (step 6)")
     sub.add_parser("pos", help="Run astrometric analysis (step 7a)")
     sub.add_parser("flux",help="Run flux analysis (step 7b)")
+    sub.add_parser("report", help="Build consolidated image-domain verification report (step 8)")
     sub.add_parser(
         "all",
-        help="Run vis -> cal -> low_high_slice -> src -> xm -> pos -> flux",
+        help="Run vis -> cal -> low_high_slice -> src -> xm -> pos -> flux -> report",
     )
     sub.add_parser(
         "images",
         aliases=["image", "image_all", "all_images"],
         help=(
-            "Run low_high_slice -> src -> xm -> pos -> flux and pass generated "
+            "Run low_high_slice -> src -> xm -> pos -> flux -> report and pass generated "
             "image products to downstream steps"
         ),
     )
