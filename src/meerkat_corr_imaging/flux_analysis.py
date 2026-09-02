@@ -27,6 +27,8 @@ from docx.shared import Inches  # noqa: E402
 from docx.oxml import OxmlElement  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
 
+from .output_paths import draft_docx_path
+
 
 # -------- shared helpers (safe column read + docx + figs) --------
 def _finite_global_max(*arrs: Iterable[np.ndarray], default: float = 1.0) -> float:
@@ -593,7 +595,7 @@ def compare_fluxes_across_band_and_scans(
     mfs_tag = os.path.basename(ref_mfs_xmatch).replace(".fits", "")
     if docx_name is None:
         docx_name = f"fluxcmp_{low_tag}__{high_tag}__{mfs_tag}.docx"
-    report_docx = os.path.join(outdir, docx_name)
+    report_docx = draft_docx_path(os.path.join(outdir, docx_name))
 
     # Create plots (peak)
     fig_peak_low = os.path.join(outdir, f"ref_vs_low_peak_{low_tag}.png")
@@ -785,7 +787,7 @@ def compare_fluxes_across_band_and_scans(
     if scans_glob:
         doc.add_paragraph(f"Scan pattern (peak per-scan): {scans_glob}")
     doc.add_paragraph(
-        "Assuming the reference flux is the ground truth, we analyse fractional differences "
+        "Assuming the reference flux is the ground truth, this report analyses fractional differences "
         "(test − ref)/ref, flux ratios (test/ref), through-origin gain estimates, and robust "
         "linear fits (with inliers/outliers separated)."
     )
