@@ -121,4 +121,4 @@ def test_images_command_runs_only_image_steps_in_order(monkeypatch, tmp_path: Pa
 
     cli.main(["--config", "unused.yaml", "images"])
 
-    assert events == ["low_high_slice", "src", "xm", "pos", "flux"]
+    assert events == ["low_high_slice", "src", "xm", "pos", "flux", "report"]

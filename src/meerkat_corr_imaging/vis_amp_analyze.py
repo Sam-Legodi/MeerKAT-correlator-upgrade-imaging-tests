@@ -41,6 +41,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from .output_paths import draft_docx_path
+
 # casacore
 try:
     from casacore.tables import table as ctable
@@ -539,7 +541,7 @@ def analyze_single(ms_path: str,
                          fig_mean_vs_bl, fig_rms_vs_bl, fig_flag_vs_scan, fig_flag_per_ant, fig_flag_vs_chan]:
                 doc.add_paragraph(Path(figp).name)
                 doc.add_picture(str(figp), width=Inches(6.5))
-            rep = outdir/"vis_amp_summary.docx"
+            rep = Path(draft_docx_path(outdir / "vis_amp_summary.docx"))
             doc.save(str(rep))
         except Exception as e:
             logger.warning(f"Could not create Word report: {e}")
