@@ -30,6 +30,7 @@ def run(cfg: Config):
         return
 
     failures: list[BaseException] = []
+    reference_results: list[Path] = []
 
     # reference first
     for ms in reference_ms:
@@ -38,15 +39,17 @@ def run(cfg: Config):
             sys.executable, "-m", "meerkat_corr_imaging.vis_amp_analyze",
             "--ms", ms,
             "--outdir", str(outdir),
+            "--exact-outdir",
         ]
         try:
             _run_cmd(cmd, inputs=[ms])
+            reference_results.append(outdir)
         except Exception as exc:
             record_failure(ms, exc)
             failures.append(exc)
 
-    # tests (optionally pass reference ms to compare)
-    ref_ms0 = reference_ms[0] if reference_ms else None
+    # Tests reuse the first reference result instead of reading that MS again.
+    ref_results0 = reference_results[0] if reference_results else None
     for t in cfg.tests:
         for ms in t.ms_paths:
             outdir = Path(cfg.paths.interim_dir) / Path(ms).with_suffix("").name
@@ -58,9 +61,10 @@ def run(cfg: Config):
                 ms,
                 "--outdir",
                 str(outdir),
+                "--exact-outdir",
             ]
-            if ref_ms0:
-                cmd += ["--ms-ref", ref_ms0]
+            if ref_results0:
+                cmd += ["--ms-ref-results", str(ref_results0)]
             try:
                 _run_cmd(cmd, inputs=[ms])
             except Exception as exc:
