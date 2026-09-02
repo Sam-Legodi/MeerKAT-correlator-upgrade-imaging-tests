@@ -108,6 +108,16 @@ def test_python_steps_launch_packaged_modules_from_any_directory(
         "meerkat_corr_imaging.positions_analysis",
         "meerkat_corr_imaging.flux_analysis",
     ]
+    visibility_commands = [
+        command
+        for command in commands
+        if command[:3]
+        == [sys.executable, "-m", "meerkat_corr_imaging.vis_amp_analyze"]
+    ]
+    assert all("--exact-outdir" in command for command in visibility_commands)
+    assert "--ms-ref-results" not in visibility_commands[0]
+    assert "--ms-ref-results" in visibility_commands[1]
+    assert "--ms-ref" not in visibility_commands[1]
 
 
 def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -> None:
