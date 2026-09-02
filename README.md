@@ -333,14 +333,39 @@ python -m meerkat_corr_imaging.cli vis --config config.yaml
 What happens:
 
 * For each `reference.ms_paths` and each test `ms_paths`, it runs
-  `python -m meerkat_corr_imaging.vis_amp_analyze ...`.
-* Outputs: CSVs, plots, and a concise DOCX report, typically under `data/interim/<msbase>/` (the wrapper passes `--outdir`).
+  `python -m meerkat_corr_imaging.vis_amp_analyze ...`. Test comparisons reuse
+  the first reference result, so the reference MeasurementSet is not analysed
+  a second time.
+* It derives separate auto- and cross-correlation RFI-free channel masks from
+  `FLAG` and `FLAG_ROW`. A channel is retained only when its aggregate flagged
+  fraction is strictly below 20%.
+* It averages unflagged amplitudes by scan, baseline, spectral window and
+  polarisation before calculating the mean and spectral RMS. The RMS is
+  measured after subtracting a 51-channel, third-order Savitzky--Golay trend.
+* It reports fractional amplitude oscillation as detrended RMS divided by mean
+  amplitude. Flagging below 20% and oscillation below 1% are `Pass`; values at
+  or above either limit are `Concern`.
+* Outputs are inspectable CSVs, diagnostic plots, and a concise draft DOCX
+  report under the deterministic `data/interim/<msbase>/` directory. A rerun
+  replaces same-named generated products in that directory.
 
 Check after running:
 
-* `data/interim/*/perrow_amp_stats.csv`
-* `data/interim/*/mean_vs_scan_split.png` and other QA plots
-* A small `.docx` in `data/reports/` (depending on your script)
+* `data/interim/*/acceptance_summary.csv`
+* `data/interim/*/rfi_free_channel_mask.csv`
+* `data/interim/*/flagging_vs_time.csv`, `flagging_by_channel.csv`,
+  `flagging_by_antenna.csv`, and `flagging_by_baseline.csv`
+* `data/interim/*/scan_averaged_amp_stats.csv`
+* `data/interim/*/scan_averaged_amp_by_antenna.csv` and
+  `scan_averaged_amp_by_baseline.csv`
+* `data/interim/*/mean_vs_scan_split.png`, `rms_vs_scan_split.png`,
+  `oscillation_vs_scan_split.png`, and the remaining QA plots
+* `data/interim/*/draft_vis_amp_summary.docx`
+
+`perrow_amp_stats.csv` is still written for compatibility, but acceptance is
+based on the scan-averaged products. The class/polarisation oscillation result
+is conservative: any assessed scan/baseline spectrum at or above 1% makes that
+class/polarisation a `Concern`.
 
 #### 3.2 Calibrate & Image with CASA (Step 3)
 
