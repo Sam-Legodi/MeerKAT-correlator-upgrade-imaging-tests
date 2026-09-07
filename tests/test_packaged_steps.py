@@ -140,6 +140,7 @@ def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -
         script = Path(command[command.index("-c") + 1])
         assert script.is_absolute() and script.is_file()
         assert script.parent.name == "meerkat_corr_imaging"
+        assert env["MCI_CASA_SCRIPT_DIR"] == str(script.parent)
         ms = str(tmp_path / ("reference.ms" if index < 2 else "test.ms"))
         if index % 2 == 0:
             assert script.name == "standalone_xxyy_solve.py"
