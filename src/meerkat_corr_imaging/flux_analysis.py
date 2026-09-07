@@ -27,7 +27,7 @@ from docx.shared import Inches  # noqa: E402
 from docx.oxml import OxmlElement  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
 
-from .output_paths import draft_docx_path
+from .output_paths import draft_docx_path, save_report
 
 
 # -------- shared helpers (safe column read + docx + figs) --------
@@ -859,7 +859,7 @@ def compare_fluxes_across_band_and_scans(
         doc.add_heading("Per-scan fractional difference (Peak)", level=1)
         _add_table(doc, scan_rows, "Table S1: Per-scan metrics of (test − ref)/ref for peak flux.")
 
-    doc.save(report_docx)
+    save_report(doc, report_docx)
 
     return {
         "outdir": outdir,
