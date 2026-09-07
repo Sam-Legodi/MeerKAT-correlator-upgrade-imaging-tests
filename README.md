@@ -752,3 +752,20 @@ The final terminal/stdout block lists the produced DOCX and PDF paths after all
 step audit summaries. The same block is saved to `produced_reports.log` in the
 configured reports directory (replaced on each run). It includes only reports
 written by that invocation; historical outputs are not scanned.
+
+### Visibility plots and reference reuse
+
+Visibility QA writes one baseline class per figure and omits classes and
+polarization series with no finite plotted samples. Auto-baselines (same antenna)
+are distinct from cross-hand products XY/YX; neither is invented when absent.
+Mean, detrended RMS and flagging by baseline use physical antenna separation
+from ANTENNA/POSITION in metres, not projected UV distance. Each figure in the
+visibility draft has a caption describing its statistic, grouping and limits.
+
+Reference QA in the configured interim directory is reused after a successful
+run writes `reference_qa_complete.json`. Reuse requires unchanged MeasurementSet
+file sizes/timestamps (excluding lock files), analyser code, and recorded outputs.
+Legacy outputs without a completion record are regenerated once. Deleting the
+record forces a fresh reference analysis. Test MeasurementSets continue to run
+and compare against the reused reference statistics. Reused reports remain in
+their original directory; they are not listed as newly produced reports.

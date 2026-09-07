@@ -405,84 +405,86 @@ def _series_label(row: pd.Series, include_spw: bool) -> str:
 
 
 def _plot_two_classes(
-    frame: pd.DataFrame,
-    x_column: str,
-    y_column: str,
-    title: str,
-    xlabel: str,
-    ylabel: str,
-    output: Path,
-    limit: Optional[float] = None,
-) -> Path:
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
-    include_spw = "SPW" in frame.columns and frame["SPW"].nunique() > 1
-    group_columns = ["POL"] + (["SPW"] if include_spw else [])
-    for axis, correlation_class in zip(axes, ("auto", "cross")):
-        subset = frame[frame.get("CLASS", "cross") == correlation_class]
-        if subset.empty:
-            axis.set_title(f"{title} ({correlation_class}; no data)")
-        else:
-            for _, group in subset.groupby(group_columns):
+    frame, x_column, y_column, title, xlabel, ylabel, output, limit=None,
+    categorical=False,
+) -> List[Path]:
+    """One populated baseline class per figure; never invent missing products."""
+    if frame.empty:
+        return []
+    usable = frame[np.isfinite(pd.to_numeric(frame[y_column], errors="coerce"))].copy()
+    if not categorical:
+        usable = usable[np.isfinite(pd.to_numeric(usable[x_column], errors="coerce"))]
+    if "TOTAL" in usable:
+        usable = usable[usable.TOTAL > 0]
+    classes = sorted(usable.CLASS.unique())
+    outputs = []
+    for correlation_class in classes:
+        subset = usable[usable.CLASS == correlation_class]
+        fig, axis = plt.subplots(figsize=(10, 5), constrained_layout=True)
+        include_spw = "SPW" in subset and subset.SPW.nunique() > 1
+        group_columns = ["POL"] + (["SPW"] if include_spw else [])
+        categories = sorted(subset[x_column].astype(str).unique()) if categorical else []
+        for _, group in subset.groupby(group_columns):
+            if categorical:
+                values = group.groupby(x_column)[y_column].median()
+                lookup = {str(key): value for key, value in values.items()}
+                x = np.arange(len(categories))
+                y = [lookup.get(key, np.nan) for key in categories]
+            else:
                 group = group.sort_values(x_column)
-                axis.plot(
-                    group[x_column],
-                    group[y_column],
-                    marker="o",
-                    markersize=3,
-                    linewidth=1,
-                    label=_series_label(group.iloc[0], include_spw),
-                )
-            axis.set_title(f"{title} ({correlation_class})")
-            axis.legend(fontsize="small")
+                x, y = group[x_column], group[y_column]
+            axis.plot(x, y, marker="o", markersize=3,
+                      linestyle="none" if x_column == "BASELINE_LENGTH_M" else "-",
+                      linewidth=1, label=_series_label(group.iloc[0], include_spw))
+        if categorical:
+            axis.set_xticks(np.arange(len(categories)))
+            axis.set_xticklabels(categories, rotation=90, fontsize=7)
         if limit is not None:
-            axis.axhline(limit, color="tab:red", linestyle="--", linewidth=1, label="limit")
-        axis.set_xlabel(xlabel)
-        axis.set_ylabel(ylabel)
+            axis.axhline(limit, color="tab:red", linestyle="--", linewidth=1, label="Acceptance limit")
+        axis.set(title=f"{title} ({correlation_class} baselines)", xlabel=xlabel, ylabel=ylabel)
+        axis.legend(fontsize="small")
         axis.grid(linestyle=":")
-    fig.savefig(output, dpi=150)
-    plt.close(fig)
-    return output
+        path = output if len(classes) == 1 else output.with_name(f"{output.stem}_{correlation_class}{output.suffix}")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        outputs.append(path)
+    return outputs
 
 
-def _plot_category(
-    frame: pd.DataFrame,
-    category: str,
-    value: str,
-    title: str,
-    ylabel: str,
-    output: Path,
-    limit: Optional[float] = None,
-) -> Path:
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
-    for axis, correlation_class in zip(axes, ("auto", "cross")):
-        subset = frame[frame.get("CLASS", "cross") == correlation_class]
-        categories = sorted(subset[category].astype(str).unique())
-        x = np.arange(len(categories))
-        if subset.empty:
-            axis.set_title(f"{title} ({correlation_class}; no data)")
-        else:
-            for pol in sorted(subset.POL.unique()):
-                group = subset[subset.POL == pol]
-                values = [
-                    group[group[category].astype(str) == item][value].median()
-                    if (group[category].astype(str) == item).any()
-                    else np.nan
-                    for item in categories
-                ]
-                axis.plot(x, values, marker="o", markersize=3, linewidth=1, label=pol)
-            axis.set_title(f"{title} ({correlation_class})")
-            axis.legend(fontsize="small")
-        if len(categories) <= 64:
-            axis.set_xticks(x)
-            axis.set_xticklabels(categories, rotation=90)
-        if limit is not None:
-            axis.axhline(limit, color="tab:red", linestyle="--", linewidth=1)
-        axis.set_xlabel(category.title())
-        axis.set_ylabel(ylabel)
-        axis.grid(linestyle=":")
-    fig.savefig(output, dpi=150)
-    plt.close(fig)
-    return output
+def _plot_category(frame, category, value, title, ylabel, output, limit=None):
+    return _plot_two_classes(frame, category, value, title, category.title(),
+                             ylabel, output, limit, categorical=True)
+
+
+def _add_baseline_lengths(scan_stats, antenna_positions):
+    """Physical antenna separation, not time-dependent projected UV distance."""
+    ant1 = scan_stats.ANT1.to_numpy(dtype=int)
+    ant2 = scan_stats.ANT2.to_numpy(dtype=int)
+    scan_stats["BASELINE_LENGTH_M"] = np.linalg.norm(
+        antenna_positions[ant2] - antenna_positions[ant1], axis=1)
+
+
+def _figure_caption(path: Path) -> str:
+    name = path.stem
+    if name.startswith("flagging"):
+        quantity = "Fraction of input visibility samples flagged, including row flags; the dashed line marks the 20% acceptance limit."
+    elif name.startswith("oscillation"):
+        quantity = "Maximum detrended spectral RMS divided by mean amplitude across scan/baseline spectra; the dashed line marks the 1% acceptance limit."
+    elif name.startswith("rms"):
+        quantity = "Median spectral RMS after subtracting the configured Savitzky-Golay trend from scan-averaged amplitude spectra in RFI-free channels."
+    else:
+        quantity = "Median mean visibility amplitude from scan-averaged spectra in RFI-free channels."
+    if "baseline" in name:
+        domain = "Each point represents one antenna pair at its physical antenna separation in metres (not projected UV distance); auto-baselines have zero length."
+    elif "antenna" in name:
+        domain = "Values are grouped by antenna, combining the baselines involving that antenna."
+    elif "channel" in name:
+        domain = "Values are grouped by spectral channel over the selected rows; spectral windows are labelled separately when present."
+    elif "time" in name:
+        domain = "Time is measured in hours from the first selected integration."
+    else:
+        domain = "Values are grouped by scan number."
+    return f"{quantity} {domain} The title identifies the baseline class; legend entries identify the available polarization products."
 
 
 def analyze_single(
@@ -871,15 +873,20 @@ def analyze_single(
     antenna_stats = scan_antenna_stats.groupby(
         ["ANT", "CLASS", "POL"], as_index=False
     ).median(numeric_only=True)
+    with ctable(str(Path(ms_path) / "ANTENNA"), readonly=True) as antennas:
+        antenna_positions = np.asarray(antennas.getcol("POSITION"), dtype=float)
+    _add_baseline_lengths(scan_stats, antenna_positions)
     baseline_stats = scan_stats.groupby(
         ["BASE", "CLASS", "POL"], as_index=False
-    )[["MEAN", "RMS", "OSC_FRAC"]].median()
+    )[["MEAN", "RMS", "OSC_FRAC", "BASELINE_LENGTH_M"]].median()
     for grouped_stats in (scan_antenna_stats, antenna_stats, baseline_stats):
         grouped_stats["OSC_PCT"] = 100.0 * grouped_stats["OSC_FRAC"]
         grouped_stats["OSC_STATUS"] = grouped_stats["OSC_FRAC"].map(
             lambda value: _acceptance_status(value, OSCILLATION_ACCEPTANCE_LIMIT)
         )
 
+    lengths = scan_stats[["BASE", "CLASS", "BASELINE_LENGTH_M"]].drop_duplicates()
+    flag_by_baseline = flag_by_baseline.merge(lengths, on=["BASE", "CLASS"], how="left")
     acceptance = acceptance_summary(scan_stats, flag_by_channel)
     output_paths = {
         "outdir": output_dir,
@@ -925,6 +932,7 @@ def analyze_single(
                 [
                     "SCAN",
                     "BASE",
+                    "BASELINE_LENGTH_M",
                     "CLASS",
                     "SPW",
                     "POL",
@@ -1031,32 +1039,37 @@ def analyze_single(
             output_dir / "flagging_per_antenna_split.png",
             limit=FLAGGING_ACCEPTANCE_LIMIT,
         ),
-        _plot_category(
+        _plot_two_classes(
             baseline_stats,
-            "BASE",
+            "BASELINE_LENGTH_M",
             "MEAN",
             "Mean amplitude by baseline",
+            "Baseline length (m)",
             "Median mean |V|",
             output_dir / "mean_vs_baseline_split.png",
         ),
-        _plot_category(
+        _plot_two_classes(
             baseline_stats,
-            "BASE",
+            "BASELINE_LENGTH_M",
             "RMS",
             "Detrended RMS by baseline",
+            "Baseline length (m)",
             "Median RMS",
             output_dir / "rms_vs_baseline_split.png",
         ),
-        _plot_category(
+        _plot_two_classes(
             flag_by_baseline,
-            "BASE",
+            "BASELINE_LENGTH_M",
             "FLAG_FRAC",
             "Flagging by baseline",
+            "Baseline length (m)",
             "Flagging fraction",
             output_dir / "flagging_vs_baseline_split.png",
             limit=FLAGGING_ACCEPTANCE_LIMIT,
         ),
     ]
+
+    figures = [path for group in figures for path in group]
 
     if HAVE_DOCX:
         try:
@@ -1104,8 +1117,8 @@ def analyze_single(
                     cell.text = str(value)
             document.add_heading("Diagnostic figures", level=2)
             for figure in figures:
-                document.add_paragraph(figure.name)
                 document.add_picture(str(figure), width=Inches(6.5))
+                document.add_paragraph(_figure_caption(figure), style="Caption")
             report_path = Path(
                 draft_docx_path(output_dir / "vis_amp_summary.docx", output_dir.name)
             )
