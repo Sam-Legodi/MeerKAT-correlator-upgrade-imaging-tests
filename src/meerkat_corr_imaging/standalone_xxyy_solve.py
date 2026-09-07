@@ -12,6 +12,22 @@ import numpy as np
 from datetime import datetime
 from time import gmtime
 
+# CASA 5 execfile may omit __file__; the CLI supplies the package directory.
+def _casa_helper_path(filename):
+    directory = os.environ.get("MCI_CASA_SCRIPT_DIR")
+    if not directory:
+        script = globals().get("__file__")
+        if not script:
+            script = next((arg for arg in sys.argv
+                           if os.path.basename(arg) == "standalone_xxyy_solve.py"), None)
+        if not script:
+            raise RuntimeError("Cannot locate CASA helpers; set MCI_CASA_SCRIPT_DIR to the meerkat_corr_imaging package directory")
+        directory = os.path.dirname(os.path.abspath(script))
+    path = os.path.join(directory, filename)
+    if not os.path.isfile(path):
+        raise IOError("CASA helper not found: " + path)
+    return path
+
 # ----------------------------- CASA COMPAT ---------------------------------
 # Do NOT import casatasks in CASA 5; tasks are globals. We only resolve tools.
 # msmetadata tool
@@ -383,7 +399,7 @@ if do_initial_flagging:
 # Load the sibling helper directly: CASA 5 cannot import the Python 3 CLI.
 if not refant or refant.lower() == "auto":
     _refant_namespace = {"__name__": "mci_calc_refant"}
-    _refant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calc_refant.py")
+    _refant_path = _casa_helper_path("calc_refant.py")
     with open(_refant_path, "rb") as _handle:
         exec(compile(_handle.read(), _refant_path, "exec"), _refant_namespace)
     refant, badants = _refant_namespace["get_ref_ant"](
@@ -394,7 +410,7 @@ else:
 
 # Resolve before solve tasks; exclusions affect application, not calibrator solves.
 _selection_namespace = {"__name__": "mci_field_selection"}
-_selection_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "field_selection.py")
+_selection_path = _casa_helper_path("field_selection.py")
 with open(_selection_path, "rb") as _handle:
     exec(compile(_handle.read(), _selection_path, "exec"), _selection_namespace)
 apply_fields = _selection_namespace["ms_field_selection"](
