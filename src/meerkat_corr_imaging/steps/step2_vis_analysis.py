@@ -5,11 +5,13 @@ from typing import Iterable
 from ..audit import (
     raise_for_failures,
     record_failure,
+    record_success,
     record_skip,
     register_inputs,
     run_logged_command,
 )
 from ..config import Config
+from ..visibility_cache import reference_is_complete, record_reference_completion, MARKER
 
 def _run_cmd(cmd: Iterable[str], *, inputs: Iterable[str] = ()):
     return run_logged_command(cmd, prefix="[VIS-QA]", inputs=inputs)
@@ -42,7 +44,13 @@ def run(cfg: Config):
             "--exact-outdir",
         ]
         try:
-            _run_cmd(cmd, inputs=[ms])
+            if reference_is_complete(ms, outdir):
+                print(f"[VIS-QA] Reusing completed reference {ms}: {outdir}")
+                record_success(ms, f"Reused completed visibility QA: {outdir}")
+            else:
+                (outdir / MARKER).unlink(missing_ok=True)
+                _run_cmd(cmd, inputs=[ms])
+                record_reference_completion(ms, outdir)
             reference_results.append(outdir)
         except Exception as exc:
             record_failure(ms, exc)
