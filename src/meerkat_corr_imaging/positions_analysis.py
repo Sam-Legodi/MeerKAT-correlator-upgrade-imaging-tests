@@ -62,7 +62,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from matplotlib.patches import Ellipse  # NEW: for enclosing ellipses
 
-from .output_paths import draft_docx_path
+from .output_paths import draft_docx_path, save_report
 
 
 def safe_div(a, b, default=np.nan):
@@ -688,7 +688,7 @@ def pos_varCMC1xCMC2(
                       "deviation below and above the median for a roughly symmetric distribution, without assuming "
                       "Gaussian noise.")
 
-    doc.save(report_docx)
+    save_report(doc, report_docx)
 
     return {
         'cbmaj_arcsec': cbmaj_arcsec,
@@ -1107,7 +1107,7 @@ def analyze_ref_vs_other_with_optional_scans(
                     doc.add_picture(fig_path, width=Inches(6.5))
                     _docx_add_caption(doc, f"Figure {fig_number}: {cap}")
                     doc.add_paragraph(interp)
-            doc.save(report_docx)
+            save_report(doc, report_docx)
     except Exception as e:
         print(f"[WARN] Could not append overlays to DOCX: {e}")
 
