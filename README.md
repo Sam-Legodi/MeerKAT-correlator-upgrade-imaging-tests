@@ -375,7 +375,24 @@ python -m meerkat_corr_imaging.cli cal --config config.yaml
 
 What happens:
 
-* If `extra.force_calibrate: true`, it runs `standalone_xxyy_solve.py` once (rare).
+* If `extra.force_calibrate: true`, it runs `standalone_xxyy_solve.py` for each
+  distinct configured `reference.ms_paths` / `tests[].ms_paths` input before imaging it.
+  Paths are resolved relative to the launch directory; `~` is expanded. Missing
+  MS directories fail before CASA starts. Calibration modifies the configured MS.
+* Standalone calibration requires `MCI_CAL_MSFILE=/path/to/input.ms` in the
+  environment. The packaged script no longer falls back to an example dataset.
+  Set `casa.flux_field` to the flux calibrator name or numeric field ID (default
+  `J0408-6545`). `casa.refant` defaults to `auto`; set it to an antenna name to
+  override automatic selection. Other calibrator fields and solve settings remain
+  in the script's USER INPUTS section and must match the observation.
+* Automatic reference selection uses the lowest flagged fraction over all
+  flux-calibrator cross-correlations, counting both baseline ends and `FLAG_ROW`.
+  Ties choose the lowest antenna ID. Missing fields or entirely flagged data fail
+  calibration. `refant_stats.json` in each calibration output directory records
+  the selected antenna and per-antenna statistics. Antennas above 80% flagged are
+  reported, not automatically flagged. This adapts `legacy_scripts/calc_refant.py`
+  without its external config-parser, bookkeeping or SLURM dependencies.
+  Other CASA code can reuse `meerkat_corr_imaging.calc_refant.get_ref_ant`.
 * Then it runs `casa -c <absolute-packaged-path>/tclean_two_bands.py [--scans=...] <all MS>`.
 * Products go next to each MS, usually in `<msdir>/images/...` with FITS exported; QA text files are created.
 
@@ -769,3 +786,24 @@ Legacy outputs without a completion record are regenerated once. Deleting the
 record forces a fresh reference analysis. Test MeasurementSets continue to run
 and compare against the reused reference statistics. Reused reports remain in
 their original directory; they are not listed as newly produced reports.
+
+### Calibration application and optional imaging
+
+Calibration now applies solutions to every MS field by default. Configure:
+
+```yaml
+casa:
+  imaging_enabled: false  # calibration-only; default true
+  exclude_fields: []  # exact names or numeric IDs, excluded from both operations
+  calibration_exclude_fields: []  # additional applycal exclusions
+  imaging_exclude_fields: []  # additional imaging exclusions
+  datacolumn: corrected  # use calibrated data when imaging
+```
+
+Exclusions affect application of calibration, not the fields used to solve gains.
+Imaging retains the `casa.field` selection and subtracts excluded fields. Unknown
+exclusions fail explicitly; excluding every imaging field skips imaging, while
+excluding every calibration field fails. Existing corrected data in excluded
+fields is not erased. Use `cal --no-imaging` to override the YAML and suppress
+CASA imaging; the flag also works before the subcommand and with `all`. This
+controls step 3 imaging only, not downstream analysis of existing image products.

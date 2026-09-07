@@ -121,6 +121,9 @@ def ensure_dir(path):
 def imagename_for(msfile, band_suffix, scan_id=None):
     msdir  = os.path.dirname(os.path.abspath(msfile))
     msbase = os.path.splitext(os.path.basename(msfile))[0]
+    if os.environ.get('MCI_TCLEAN_EXCLUDE_FIELDS', '[]') != '[]':
+        import hashlib
+        msbase += '_fields_' + hashlib.sha256(FIELDNAME.encode('utf-8')).hexdigest()[:10]
     outdir = os.path.join(msdir, 'images')
     ensure_dir(outdir)
     if scan_id is None:
@@ -832,16 +835,32 @@ def preflight_all(targets):
             qa_fits(fits_)
 
 def main(argv):
+    global FIELDNAME
+    import json
+    excluded = json.loads(os.environ.get("MCI_TCLEAN_EXCLUDE_FIELDS", "[]"))
+    configured_field = FIELDNAME
     args = parse_driver_args(argv)
     targets = resolve_ms_list(args.ms_paths)
     requested_scan_ids = _parse_scan_list(args.scans)
-    preflight_all(targets)
+    targets = [os.path.abspath(os.path.expanduser(ms)) for ms in targets]
+    missing = [ms for ms in targets if not os.path.isdir(ms)]
+    if missing:
+        raise IOError("MeasurementSet directories not found: {}".format(", ".join(missing)))
+    if not excluded:
+        preflight_all(targets)
 
     for ms in targets:
-        if not os.path.isdir(ms):
-            print("Skip: not found -> {}".format(ms))
-            continue
-
+        FIELDNAME = configured_field
+        if excluded:
+            namespace = {"__name__": "mci_field_selection"}
+            helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "field_selection.py")
+            with open(helper, "rb") as handle:
+                exec(compile(handle.read(), helper, "exec"), namespace)
+            FIELDNAME = namespace["ms_field_selection"](
+                ms, excluded, configured_field.split(',') if configured_field else None, allow_empty=True)
+            if FIELDNAME is None:
+                print('Imaging skipped: all selected fields excluded for ' + ms)
+                continue
         # Decide effective bands for this MS (table-based, no msmd) for band-level images
         (low_lo, low_hi), (high_lo, high_hi) = decide_bands(ms)
 

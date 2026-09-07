@@ -7,7 +7,7 @@
 #   casa -c standalone_xxyy_solve.py
 
 from __future__ import print_function
-import os, sys, shutil, logging
+import os, sys, shutil, logging, json
 import numpy as np
 from datetime import datetime
 from time import gmtime
@@ -281,17 +281,22 @@ class Fields(object):
         self.fluxfield = fluxfield  # comma-separated CASA field selector
 
 # MeasurementSet to calibrate
-visname = "data/reference_obs/1692135074_sdp_l0.full.ms"
+visname = os.environ.get("MCI_CAL_MSFILE", "").strip()
+if not visname:
+    raise ValueError("Set MCI_CAL_MSFILE to the MeasurementSet to calibrate")
+visname = os.path.abspath(os.path.expanduser(visname))
+if not os.path.isdir(visname):
+    raise IOError("MeasurementSet directory not found: {}".format(visname))
 antennas = ""
-refant   = "m060"
+refant = os.environ.get("MCI_CAL_REFANT", "auto").strip()
 
 # Fields
-flux_field   = "J0408-6545"
+flux_field = os.environ.get("MCI_CAL_FLUX_FIELD", "J0408-6545")
 bp_field     = "J0408-6545"
 delay_field  = "J0408-6545"
 gain_fields  = "J1619-8418"
 target_fields= "J2147-8132"
-apply_to_all = False  # applycal to all fields (True) or only listed fields (False)
+
 
 # Solution intervals
 delay_solint  = "inf"
@@ -375,6 +380,27 @@ if do_initial_flagging:
     _log("Initial flagging...")
     flagdata(**initial_flagging_args)
 
+# Load the sibling helper directly: CASA 5 cannot import the Python 3 CLI.
+if not refant or refant.lower() == "auto":
+    _refant_namespace = {"__name__": "mci_calc_refant"}
+    _refant_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calc_refant.py")
+    with open(_refant_path, "rb") as _handle:
+        exec(compile(_handle.read(), _refant_path, "exec"), _refant_namespace)
+    refant, badants = _refant_namespace["get_ref_ant"](
+        visname, flux_field, stats_path=out("refant_stats.json", outdir, make_outdir))
+    _log("Automatic reference antenna: {}; >80% flagged antenna IDs: {}".format(refant, badants))
+else:
+    _log("Configured reference antenna: {}".format(refant))
+
+# Resolve before solve tasks; exclusions affect application, not calibrator solves.
+_selection_namespace = {"__name__": "mci_field_selection"}
+_selection_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "field_selection.py")
+with open(_selection_path, "rb") as _handle:
+    exec(compile(_handle.read(), _selection_path, "exec"), _selection_namespace)
+apply_fields = _selection_namespace["ms_field_selection"](
+    visname, json.loads(os.environ.get("MCI_CAL_EXCLUDE_FIELDS", "[]")))
+_log("Calibration will be applied to field IDs: {}".format(apply_fields))
+
 # setjy (exact behavior from your setjy.py)
 _log("Running do_setjy...")
 do_setjy(visname=visname,
@@ -439,24 +465,13 @@ if do_leakage:
     gaintables.append(ct_leakage)
 interp = (interp_all + ["linear"] * 10)[:len(gaintables)]
 
-if apply_to_all:
-    _log("  applying to all fields")
-    applycal(vis=visname,
-             field=",".join([flux_field, gain_fields, target_fields]),
-             gaintable=gaintables,
-             interp=interp,
-             calwt=calwt,
-             parang=True,
-             applymode=apply_mode)
-else:
-    _log("  applying to select fields: {}".format(",".join([flux_field, gain_fields])))
-    applycal(vis=visname,
-             field=",".join([flux_field, gain_fields]),
-             gaintable=gaintables,
-             interp=interp,
-             calwt=calwt,
-             parang=True,
-             applymode=apply_mode)
+applycal(vis=visname,
+         field=apply_fields,
+         gaintable=gaintables,
+         interp=interp,
+         calwt=calwt,
+         parang=True,
+         applymode=apply_mode)
 
 # Optional split of targets
 if do_split:
