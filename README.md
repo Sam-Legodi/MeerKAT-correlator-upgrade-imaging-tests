@@ -807,3 +807,9 @@ excluding every calibration field fails. Existing corrected data in excluded
 fields is not erased. Use `cal --no-imaging` to override the YAML and suppress
 CASA imaging; the flag also works before the subcommand and with `all`. This
 controls step 3 imaging only, not downstream analysis of existing image products.
+
+For XX-only, YY-only, or XX/YY-only MeasurementSets, calibration automatically
+sets `parang=False` on gain, bandpass and application tasks. The decision uses
+all rows of `POLARIZATION.CORR_TYPE` separately for each MS. Leakage solving
+and application are skipped for these inputs because cross-hands are absent.
+Other correlation layouts retain the existing calibration behavior.
