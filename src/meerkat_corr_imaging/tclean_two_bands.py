@@ -25,6 +25,22 @@ import argparse
 import datetime
 import numpy as np
 
+# CASA 5 execfile may omit __file__; the CLI supplies the package directory.
+def _casa_helper_path(filename):
+    directory = os.environ.get("MCI_CASA_SCRIPT_DIR")
+    if not directory:
+        script = globals().get("__file__")
+        if not script:
+            script = next((arg for arg in sys.argv
+                           if os.path.basename(arg) == "tclean_two_bands.py"), None)
+        if not script:
+            raise RuntimeError("Cannot locate CASA helpers; set MCI_CASA_SCRIPT_DIR to the meerkat_corr_imaging package directory")
+        directory = os.path.dirname(os.path.abspath(script))
+    path = os.path.join(directory, filename)
+    if not os.path.isfile(path):
+        raise IOError("CASA helper not found: " + path)
+    return path
+
 # Try CASA 6 task imports; fall back to CASA 5 globals if present.
 try:
     from casatasks import tclean, exportfits
@@ -853,7 +869,7 @@ def main(argv):
         FIELDNAME = configured_field
         if excluded:
             namespace = {"__name__": "mci_field_selection"}
-            helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "field_selection.py")
+            helper = _casa_helper_path("field_selection.py")
             with open(helper, "rb") as handle:
                 exec(compile(handle.read(), helper, "exec"), namespace)
             FIELDNAME = namespace["ms_field_selection"](
