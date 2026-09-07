@@ -98,3 +98,25 @@ def test_failed_render_preserves_previous_pdf(monkeypatch, tmp_path):
         output_paths.export_pdf(source)
     assert target.read_bytes() == b'previous PDF'
     assert not list(tmp_path.glob('.mci-pdf-*'))
+
+
+def test_pdf_preserves_source_plot_pixels(tmp_path):
+    import re
+    import numpy as np
+    from PIL import Image
+    from docx import Document
+    from docx.shared import Inches
+    # Fine pixel detail must survive even when the image is scaled to fit a page.
+    height, width = 900, 2400
+    pixels = np.random.default_rng(42).integers(0, 256, (height, width, 3), dtype=np.uint8)
+    figure = tmp_path / 'source.png'
+    Image.fromarray(pixels).save(figure)
+    document = Document()
+    document.add_picture(str(figure), width=Inches(6.5))
+    source = tmp_path / 'report.docx'
+    document.save(source)
+    pdf = output_paths.export_pdf(source).read_bytes()
+    image_headers = re.findall(rb'/Subtype /Image\b(.*?)stream', pdf, re.S)
+    dimensions = [(int(re.search(rb'/Width (\d+)', h)[1]),
+                   int(re.search(rb'/Height (\d+)', h)[1])) for h in image_headers]
+    assert (width, height) in dimensions
