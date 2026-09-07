@@ -729,3 +729,26 @@ If this work contributes to published research, please cite the repository.
 ```
 
 ---
+
+### Draft reports and terminal sessions
+
+The CLI checks `TMUX` and `STY` before loading the pipeline configuration. Outside
+those sessions it offers commands with a deterministic session name (at most ten
+characters, derived from the config filename and command), and asks whether to
+continue. Only `y` or `yes` continues; Enter or unavailable stdin cancels.
+
+Draft DOCX basenames include the observation/epoch suffix. Visibility reports use
+their observation output directory; other reports use the nearest timestamped
+observation directory, falling back to the configured test name(s). The consolidated
+verification report uses its configured test label. Existing reports are not renamed.
+
+At the end of a CLI run, each DOCX written during that run is rendered to a
+same-basename PDF beside it using the existing python-docx and Matplotlib
+dependencies. No external converter or additional installation is required.
+Paragraphs, tables and embedded figures are retained in document order; PDF
+pagination and styling are independent of Word layout. An export failure
+retains the DOCX, prints the reason, and makes the CLI exit with status 1.
+The final terminal/stdout block lists the produced DOCX and PDF paths after all
+step audit summaries. The same block is saved to `produced_reports.log` in the
+configured reports directory (replaced on each run). It includes only reports
+written by that invocation; historical outputs are not scanned.

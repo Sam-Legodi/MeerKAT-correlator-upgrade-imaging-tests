@@ -164,6 +164,7 @@ def test_cli_all_audits_each_step_immediately(monkeypatch, tmp_path: Path) -> No
         events.append(f"audit end {step_name}")
 
     monkeypatch.setattr(cli, "run_step_with_audit", audited)
+    monkeypatch.setenv("TMUX", "test-session")
     cli.main(["--config", "unused.yaml", "all"])
 
     assert events == [

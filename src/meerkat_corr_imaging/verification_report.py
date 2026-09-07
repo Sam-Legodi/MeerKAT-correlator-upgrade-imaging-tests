@@ -33,7 +33,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from .config import Config
-from .output_paths import draft_docx_path
+from .output_paths import draft_docx_path, save_report
 
 
 POSITION_LIMIT_ARCSEC = 1.0
@@ -813,7 +813,7 @@ def _build_docx(
     _add_table(doc, ["Item", "Value"], provenance_rows)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(output)
+    save_report(doc, output)
 
 
 def build_verification_report(cfg: Config) -> Path:
@@ -837,7 +837,7 @@ def build_verification_report(cfg: Config) -> Path:
     requested_output = report_cfg.get(
         "output_docx", output_dir / f"{observation_label}_imaging_verification.docx"
     )
-    output = Path(draft_docx_path(requested_output)).expanduser()
+    output = Path(draft_docx_path(requested_output, observation_label)).expanduser()
     figure_path = output_dir / "figures" / f"{observation_label}_acceptance_metrics.png"
     _plot_acceptance(results, figure_path)
 

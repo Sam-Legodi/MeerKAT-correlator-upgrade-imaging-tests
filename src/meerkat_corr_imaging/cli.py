@@ -1,5 +1,14 @@
 import argparse
 import sys
+import os
+import re
+import shlex
+import hashlib
+import json
+import tempfile
+import traceback
+from pathlib import Path
+from .output_paths import export_pdf
 from .audit import run_step_with_audit
 from .config import load_config
 from .image_pipeline import wire_image_pipeline
@@ -53,8 +62,27 @@ def _normalize_cli_args(argv):
             rest.append(token)
     return cfg_tokens + rest
 
+def _confirm_session(args, argv):
+    if os.environ.get("TMUX") or os.environ.get("STY"):
+        return
+    label = re.sub(r"[^A-Za-z0-9]", "", Path(args.config).stem)[:5] or "mci"
+    digest = hashlib.sha256((str(Path(args.config).resolve()) + args.cmd).encode()).hexdigest()[:4]
+    session = label + "-" + digest
+    command = shlex.join([sys.executable, "-m", "meerkat_corr_imaging.cli", *argv])
+    print("WARNING: This pipeline is running outside tmux or screen.")
+    print(f"Start a session: tmux new -s {session}")
+    print(f"Or: screen -S {session}")
+    print(f"Then rerun: {command}")
+    try:
+        answer = input("Continue outside tmux/screen? [y/N]: ")
+    except (EOFError, OSError):
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        raise SystemExit("Pipeline cancelled; restart inside tmux or screen.")
+
+
 def main(argv=None):
-    argv = argv or sys.argv[1:]
+    argv = sys.argv[1:] if argv is None else argv
     norm_argv = _normalize_cli_args(list(argv))
     p = argparse.ArgumentParser(prog="mci", description="MeerKAT correlator imaging orchestration")
     p.add_argument("--config", required=True, help="Path to master YAML config")
@@ -82,6 +110,7 @@ def main(argv=None):
     )
 
     args = p.parse_args(norm_argv)
+    _confirm_session(args, list(argv))
     cfg = load_config(args.config)
 
     if args.cmd in IMAGE_COMMANDS:
@@ -96,13 +125,43 @@ def main(argv=None):
         requested_steps = IMAGE_STEPS
     else:
         requested_steps = ALL_STEPS if args.cmd == "all" else (args.cmd,)
-    for command_name in requested_steps:
-        step_name, runner = STEP_RUNNERS[command_name]
-        run_step_with_audit(
-            step_name,
-            cfg.paths.reports_dir,
-            lambda runner=runner: runner(cfg),
-        )
+    previous = {key: os.environ.get(key) for key in
+                ("MCI_REPORT_MANIFEST", "MCI_REPORT_OBSERVATION")}
+    failed = False
+    with tempfile.TemporaryDirectory(prefix="mci-reports-") as tmp:
+        manifest = Path(tmp) / "reports.jsonl"
+        os.environ["MCI_REPORT_MANIFEST"] = str(manifest)
+        os.environ["MCI_REPORT_OBSERVATION"] = "_vs_".join(t.name for t in cfg.tests) or cfg.reference.name
+        try:
+            for command_name in requested_steps:
+                step_name, runner = STEP_RUNNERS[command_name]
+                run_step_with_audit(step_name, cfg.paths.reports_dir,
+                                    lambda runner=runner: runner(cfg))
+        except Exception:
+            traceback.print_exc()
+            failed = True
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            reports = sorted(set(json.loads(line) for line in manifest.read_text().splitlines())) if manifest.exists() else []
+            produced = []
+            for report in reports:
+                produced.append(report)
+                try:
+                    produced.append(str(export_pdf(report)))
+                except Exception as exc:
+                    print(f"[REPORT] PDF export failed for {report}: {exc}")
+                    failed = True
+            summary = "[REPORTS] Produced report files:\n" + ("\n".join(produced) or "(none)") + "\n"
+            report_dir = Path(cfg.paths.reports_dir).expanduser()
+            report_dir.mkdir(parents=True, exist_ok=True)
+            (report_dir / "produced_reports.log").write_text(summary, encoding="utf-8")
+            print(summary, end="", flush=True)
+    if failed:
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     main()
