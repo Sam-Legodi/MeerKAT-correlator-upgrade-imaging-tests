@@ -110,7 +110,10 @@ class _Pages:
         axes = self.figure.add_axes([
             (self.width - width) / 2 / self.width,
             (self.y - height) / self.height, width / self.width, height / self.height])
-        axes.imshow(image)
+        # PDF/SVG backends embed the original raster with interpolation='none'.
+        # Default interpolation resamples it to the 72-DPI layout canvas, losing
+        # source plot detail. Keep page geometry in points and preserve pixels.
+        axes.imshow(image, interpolation='none', resample=False)
         axes.axis('off')
         self.y -= height + 12
 

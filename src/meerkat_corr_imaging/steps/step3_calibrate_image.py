@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 from pathlib import Path
 from typing import Iterable, List
 from ..audit import (
@@ -30,6 +31,7 @@ def run(cfg: Config):
     tclean_script = package_dir / "tclean_two_bands.py"
     solve_script = package_dir / "standalone_xxyy_solve.py"
     tclean_env = os.environ.copy()
+    tclean_env["MCI_TCLEAN_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.imaging_exclude_fields)
     tclean_env["MCI_TCLEAN_FIELD"] = cfg.casa.field
     tclean_env["MCI_TCLEAN_DATACOL"] = cfg.casa.datacolumn
     tclean_env["MCI_TCLEAN_IMAGE_SCANS"] = "1" if cfg.casa.image_scans else "0"
@@ -41,21 +43,17 @@ def run(cfg: Config):
     all_ms = list(cfg.reference.ms_paths)
     for t in cfg.tests:
         all_ms += t.ms_paths
-    audit_inputs = (["standalone_xxyy_solve"] if cfg.extra.get("force_calibrate", False) else []) + all_ms
-    register_inputs(audit_inputs)
-
-    # optional rare calibration step (explicit flag in config)
-    if cfg.extra.get("force_calibrate", False):
-        if not solve_script.exists():
-            raise FileNotFoundError(f"Missing {solve_script}")
-        # User maintains inputs inside the CASA script; we just call CASA here.
-        _run_cmd(
-            [casa_bin, "--nologger", "--log2term", "-c", str(solve_script)],
-            inputs=["standalone_xxyy_solve"],
-        )
+    # Resolve against the launch directory, matching the other pipeline steps.
+    all_ms = list(dict.fromkeys(str(Path(ms).expanduser().resolve()) for ms in all_ms))
+    register_inputs(all_ms)
+    missing = [ms for ms in all_ms if not Path(ms).is_dir()]
+    if missing:
+        raise FileNotFoundError("Configured MeasurementSet directories not found: " + ", ".join(missing))
+    if cfg.extra.get("force_calibrate", False) and not all_ms:
+        raise ValueError("force_calibrate requires reference.ms_paths or tests[].ms_paths")
 
     # imaging for all MS (reference + tests)
-    if not tclean_script.is_file():
+    if cfg.casa.imaging_enabled and not tclean_script.is_file():
         raise FileNotFoundError(f"Missing {tclean_script}")
 
     scans_arg = []
@@ -71,6 +69,24 @@ def run(cfg: Config):
     failures: list[BaseException] = []
     for ms in all_ms:
         try:
+            if cfg.extra.get("force_calibrate", False):
+                if not solve_script.is_file():
+                    raise FileNotFoundError(f"Missing {solve_script}")
+                solve_env = os.environ.copy()
+                solve_env["MCI_CAL_MSFILE"] = ms
+                solve_env["MCI_CAL_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.calibration_exclude_fields)
+                solve_env["MCI_CAL_REFANT"] = cfg.casa.refant
+                solve_env["MCI_CAL_FLUX_FIELD"] = cfg.casa.flux_field
+                _run_cmd(
+                    [casa_bin, "--nologger", "--log2term", "-c", str(solve_script)],
+                    env=solve_env,
+                    inputs=[ms],
+                )
+            if not cfg.casa.imaging_enabled:
+                print(f"[CAL/IMAGING] Imaging disabled for {ms}")
+                continue
+            # Do not let an inherited standalone override replace YAML inputs.
+            tclean_env["MCI_TCLEAN_MSFILE"] = ms
             _run_cmd(
                 [
                     casa_bin,
