@@ -25,6 +25,12 @@ class FrequencyRangesCfg:
 
 @dataclass
 class CasaCfg:
+    imaging_enabled: bool = True
+    exclude_fields: List[str] = field(default_factory=list)
+    calibration_exclude_fields: List[str] = field(default_factory=list)
+    imaging_exclude_fields: List[str] = field(default_factory=list)
+    refant: str = "auto"
+    flux_field: str = "J0408-6545"
     scans: str = ""
     lowband_hz: Optional[List[float]] = None
     highband_hz: Optional[List[float]] = None
@@ -239,7 +245,19 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
     low_high_enabled = low_high_raw.get("enabled", False)
     frequency_ranges = _shared_frequency_ranges(d, casa_raw, low_high_raw)
 
+    for key in ("exclude_fields", "calibration_exclude_fields", "imaging_exclude_fields"):
+        values = casa_raw.get(key, [])
+        if not isinstance(values, list) or any(isinstance(v, bool) or not isinstance(v, (str, int)) for v in values):
+            raise ValueError("casa." + key + " must be a list of field names or IDs")
+    if not isinstance(casa_raw.get("imaging_enabled", True), bool):
+        raise ValueError("casa.imaging_enabled must be a boolean")
     casa = CasaCfg(
+        imaging_enabled=casa_raw.get("imaging_enabled", True),
+        exclude_fields=[str(v) for v in casa_raw.get("exclude_fields", [])],
+        calibration_exclude_fields=[str(v) for v in casa_raw.get("calibration_exclude_fields", [])],
+        imaging_exclude_fields=[str(v) for v in casa_raw.get("imaging_exclude_fields", [])],
+        refant=str(casa_raw.get("refant") or "auto"),
+        flux_field=str(casa_raw.get("flux_field", "J0408-6545")),
         scans=casa_raw.get("scans", ""),
         lowband_hz=_step_frequency_override(
             casa_raw, "lowband_hz", frequency_ranges.lowband_hz, "casa"

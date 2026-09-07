@@ -125,25 +125,56 @@ def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -
     cfg.extra["force_calibrate"] = True
     monkeypatch.chdir(tmp_path)
 
-    commands: list[list[str]] = []
+    for name in ("reference.ms", "test.ms"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("MCI_TCLEAN_MSFILE", "stale.ms")
+    calls = []
     monkeypatch.setattr(
-        step3_calibrate_image,
-        "_run_cmd",
-        lambda cmd, env=None, **kwargs: commands.append(list(cmd)),
+        step3_calibrate_image, "_run_cmd",
+        lambda cmd, env=None, **kwargs: calls.append((list(cmd), dict(env))),
     )
     step3_calibrate_image.run(cfg)
 
-    assert len(commands) == 3
-    for command in commands:
+    assert len(calls) == 4
+    for index, (command, env) in enumerate(calls):
         script = Path(command[command.index("-c") + 1])
-        assert script.is_absolute()
-        assert script.is_file()
+        assert script.is_absolute() and script.is_file()
         assert script.parent.name == "meerkat_corr_imaging"
-    assert commands[0][commands[0].index("-c") + 1].endswith("standalone_xxyy_solve.py")
-    assert commands[1][commands[1].index("-c") + 1].endswith("tclean_two_bands.py")
-    assert commands[2][commands[2].index("-c") + 1].endswith("tclean_two_bands.py")
-    assert commands[1][-1] == "reference.ms"
-    assert commands[2][-1] == "test.ms"
+        ms = str(tmp_path / ("reference.ms" if index < 2 else "test.ms"))
+        if index % 2 == 0:
+            assert script.name == "standalone_xxyy_solve.py"
+            assert env["MCI_CAL_MSFILE"] == ms
+            assert env["MCI_CAL_REFANT"] == cfg.casa.refant
+            assert env["MCI_CAL_FLUX_FIELD"] == cfg.casa.flux_field
+        else:
+            assert script.name == "tclean_two_bands.py"
+            assert command[-1] == env["MCI_TCLEAN_MSFILE"] == ms
+
+
+def test_casa_missing_input_fails_before_launch(tmp_path, monkeypatch):
+    import pytest
+    cfg = _config(tmp_path)
+    cfg.extra["force_calibrate"] = True
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr(step3_calibrate_image, "_run_cmd", lambda *a, **k: calls.append(a))
+    with pytest.raises(FileNotFoundError, match="reference.ms.*test.ms"):
+        step3_calibrate_image.run(cfg)
+    assert calls == []
+
+
+def test_solver_requires_explicit_existing_input(monkeypatch, tmp_path):
+    import pytest
+    # Execute the input validation in isolation without importing CASA tasks.
+    script = Path(step3_calibrate_image.__file__).resolve().parents[1] / "standalone_xxyy_solve.py"
+    source = script.read_text().split("# MeasurementSet to calibrate\n", 1)[1].split('antennas =', 1)[0]
+    import os
+    monkeypatch.delenv("MCI_CAL_MSFILE", raising=False)
+    with pytest.raises(ValueError, match="MCI_CAL_MSFILE"):
+        exec(source, {"os": os})
+    monkeypatch.setenv("MCI_CAL_MSFILE", str(tmp_path / "missing.ms"))
+    with pytest.raises(IOError, match="missing.ms"):
+        exec(source, {"os": os})
 
 
 def test_flux_step_runs_each_chained_analysis(tmp_path: Path, monkeypatch) -> None:
@@ -173,3 +204,23 @@ def test_flux_step_runs_each_chained_analysis(tmp_path: Path, monkeypatch) -> No
     assert commands[0][2] == "meerkat_corr_imaging.flux_analysis"
     assert "test-a-mfs.fits" in commands[0]
     assert "test-b-mfs.fits" in commands[1]
+
+
+def test_calibration_only_passes_exclusions(tmp_path, monkeypatch):
+    import json
+    cfg = _config(tmp_path)
+    cfg.extra['force_calibrate'] = True
+    cfg.casa.imaging_enabled = False
+    cfg.casa.exclude_fields = ['target']
+    cfg.casa.calibration_exclude_fields = ['2']
+    monkeypatch.chdir(tmp_path)
+    for ms in ('reference.ms', 'test.ms'):
+        (tmp_path / ms).mkdir()
+    calls = []
+    monkeypatch.setattr(step3_calibrate_image, '_run_cmd',
+                        lambda cmd, env=None, **kw: calls.append((cmd, env)))
+    step3_calibrate_image.run(cfg)
+    assert len(calls) == 2
+    for cmd, env in calls:
+        assert cmd[-1].endswith('standalone_xxyy_solve.py')
+        assert json.loads(env['MCI_CAL_EXCLUDE_FIELDS']) == ['target', '2']

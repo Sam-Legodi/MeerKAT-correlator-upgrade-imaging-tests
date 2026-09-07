@@ -45,6 +45,7 @@ def _normalize_cli_args(argv):
     rewriting the argv list so argparse always sees it first.
     """
     cfg_tokens = []
+    flags = []
     rest = []
     skip_next = False
     for idx, token in enumerate(argv):
@@ -56,11 +57,13 @@ def _normalize_cli_args(argv):
                 raise SystemExit("error: --config requires a value")
             cfg_tokens = ["--config", argv[idx + 1]]
             skip_next = True
+        elif token == "--no-imaging":
+            flags.append(token)
         elif token.startswith("--config="):
             cfg_tokens = [token]
         else:
             rest.append(token)
-    return cfg_tokens + rest
+    return cfg_tokens + flags + rest
 
 def _confirm_session(args, argv):
     if os.environ.get("TMUX") or os.environ.get("STY"):
@@ -86,6 +89,7 @@ def main(argv=None):
     norm_argv = _normalize_cli_args(list(argv))
     p = argparse.ArgumentParser(prog="mci", description="MeerKAT correlator imaging orchestration")
     p.add_argument("--config", required=True, help="Path to master YAML config")
+    p.add_argument("--no-imaging", action="store_true", help="Disable CASA imaging in cal/all (overrides config)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("vis", help="Run visibility QA (step 2)")
@@ -112,6 +116,8 @@ def main(argv=None):
     args = p.parse_args(norm_argv)
     _confirm_session(args, list(argv))
     cfg = load_config(args.config)
+    if args.no_imaging:
+        cfg.casa.imaging_enabled = False
 
     if args.cmd in IMAGE_COMMANDS:
         plan = wire_image_pipeline(cfg)
