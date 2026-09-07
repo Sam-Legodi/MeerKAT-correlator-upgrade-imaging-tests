@@ -31,6 +31,7 @@ def run(cfg: Config):
     tclean_script = package_dir / "tclean_two_bands.py"
     solve_script = package_dir / "standalone_xxyy_solve.py"
     tclean_env = os.environ.copy()
+    tclean_env["MCI_CASA_SCRIPT_DIR"] = str(package_dir)
     tclean_env["MCI_TCLEAN_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.imaging_exclude_fields)
     tclean_env["MCI_TCLEAN_FIELD"] = cfg.casa.field
     tclean_env["MCI_TCLEAN_DATACOL"] = cfg.casa.datacolumn
@@ -73,6 +74,7 @@ def run(cfg: Config):
                 if not solve_script.is_file():
                     raise FileNotFoundError(f"Missing {solve_script}")
                 solve_env = os.environ.copy()
+                solve_env["MCI_CASA_SCRIPT_DIR"] = str(package_dir)
                 solve_env["MCI_CAL_MSFILE"] = ms
                 solve_env["MCI_CAL_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.calibration_exclude_fields)
                 solve_env["MCI_CAL_REFANT"] = cfg.casa.refant
