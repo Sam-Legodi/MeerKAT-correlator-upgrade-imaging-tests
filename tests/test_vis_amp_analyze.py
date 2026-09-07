@@ -68,3 +68,33 @@ def test_acceptance_summary_applies_strict_limits_and_worst_spectrum() -> None:
     assert cross.FLAG_STATUS == "Concern"
     assert cross.OSC_STATUS == "Concern"
     assert cross.OSC_MAX_PCT == 1.0
+
+
+def test_single_panel_skips_absent_classes_and_nonfinite_products(tmp_path, monkeypatch):
+    from meerkat_corr_imaging import vis_amp_analyze as vis
+    frame = pd.DataFrame([
+        {'CLASS': 'cross', 'POL': 'XX', 'CHAN': 1, 'FLAG_FRAC': .1, 'TOTAL': 10},
+        {'CLASS': 'cross', 'POL': 'YY', 'CHAN': 1, 'FLAG_FRAC': .2, 'TOTAL': 10},
+        {'CLASS': 'cross', 'POL': 'XY', 'CHAN': 1, 'FLAG_FRAC': np.nan, 'TOTAL': 0},
+    ])
+    captured = []
+    original = vis.plt.close
+    def capture(fig):
+        if hasattr(fig, 'axes'):
+            captured.append([(axis.get_title(), [line.get_label() for line in axis.lines]) for axis in fig.axes])
+        original(fig)
+    monkeypatch.setattr(vis.plt, 'close', capture)
+    paths = vis._plot_two_classes(frame, 'CHAN', 'FLAG_FRAC', 'Flagging', 'Channel', 'Fraction', tmp_path / 'flagging_by_channel.png')
+    assert len(paths) == 1
+    assert paths[0].name == 'flagging_by_channel.png'
+    assert captured[-1] == [('Flagging (cross baselines)', ['XX', 'YY'])]
+    frame.loc[len(frame)] = ['auto', 'XX', 1, .1, 10]
+    assert len(vis._plot_two_classes(frame, 'CHAN', 'FLAG_FRAC', 'Flagging', 'Channel', 'Fraction', tmp_path / 'both.png')) == 2
+    assert all(len(axes) == 1 for axes in captured)
+
+
+def test_physical_baseline_lengths():
+    from meerkat_corr_imaging.vis_amp_analyze import _add_baseline_lengths
+    frame = pd.DataFrame({'ANT1': [0, 0, 1], 'ANT2': [0, 1, 0]})
+    _add_baseline_lengths(frame, np.array([[0, 0, 0], [3, 4, 0]]))
+    assert frame.BASELINE_LENGTH_M.tolist() == [0, 5, 5]
