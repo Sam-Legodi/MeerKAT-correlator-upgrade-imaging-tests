@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .output_paths import draft_docx_path
+from .output_paths import draft_docx_path, save_report
 
 try:
     from casacore.tables import table as ctable
@@ -1107,9 +1107,9 @@ def analyze_single(
                 document.add_paragraph(figure.name)
                 document.add_picture(str(figure), width=Inches(6.5))
             report_path = Path(
-                draft_docx_path(output_dir / "vis_amp_summary.docx")
+                draft_docx_path(output_dir / "vis_amp_summary.docx", output_dir.name)
             )
-            document.save(report_path)
+            save_report(document, report_path)
             output_paths["report"] = report_path
         except Exception as exc:
             logger.warning("Could not create Word report: %s", exc)
