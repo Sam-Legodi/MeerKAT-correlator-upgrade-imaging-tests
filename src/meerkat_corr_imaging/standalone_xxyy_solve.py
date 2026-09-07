@@ -417,6 +417,19 @@ apply_fields = _selection_namespace["ms_field_selection"](
     visname, json.loads(os.environ.get("MCI_CAL_EXCLUDE_FIELDS", "[]")))
 _log("Calibration will be applied to field IDs: {}".format(apply_fields))
 
+# Choose independently for each MS; never infer correlations from its filename.
+_policy_namespace = {"__name__": "mci_correlation_policy"}
+_policy_path = _casa_helper_path("correlation_policy.py")
+with open(_policy_path, "rb") as _handle:
+    exec(compile(_handle.read(), _policy_path, "exec"), _policy_namespace)
+parallel_only = _policy_namespace["ms_parallel_linear_only"](visname)
+apply_parang = not parallel_only
+_log("XX/YY-only input: {}; calibration parang={}".format(parallel_only, apply_parang))
+if parallel_only:
+    # D-term calibration needs cross-hands; omit its solve and application.
+    do_leakage = False
+    _log("Skipping leakage calibration for XX/YY-only input")
+
 # setjy (exact behavior from your setjy.py)
 _log("Running do_setjy...")
 do_setjy(visname=visname,
@@ -430,28 +443,28 @@ do_setjy(visname=visname,
 _log("gaincal: delays (K)...")
 gaincal(vis=visname, caltable=ct_delay, field=delay_field,
         solint=delay_solint, refant=refant, gaintype="K", calmode="p",
-        minblperant=4, minsnr=3.0)
+        minblperant=4, minsnr=3.0, parang=False)
 
 # Pre-bandpass phase
 _log("gaincal: pre-bandpass phase...")
 gaincal(vis=visname, caltable=ct_gp_prebp, field=bp_field,
         solint=phase_solint, combine=phase_combine, refant=refant,
         gaintype="G", calmode="p", minblperant=4, minsnr=3.0,
-        gaintable=[ct_delay], parang=True)
+        gaintable=[ct_delay], parang=apply_parang)
 
 # Bandpass
 _log("bandpass...")
 bandpass(vis=visname, caltable=ct_bandpass, field=bp_field,
          solint=bp_solint, combine=bp_combine, refant=refant,
          minblperant=4, minsnr=3.0, gaintable=[ct_delay, ct_gp_prebp],
-         parang=True)
+         parang=apply_parang)
 
 # Phase-only gains
 _log("gaincal: phase-only...")
 gaincal(vis=visname, caltable=ct_gphase, field=gain_fields,
         solint=phase_solint, combine=phase_combine, refant=refant,
         gaintype="G", calmode="p", minblperant=4, minsnr=3.0,
-        gaintable=[ct_delay, ct_bandpass], parang=True)
+        gaintable=[ct_delay, ct_bandpass], parang=apply_parang)
 
 # Amp+phase gains
 _log("gaincal: flux_field and gain_field amp+phase...")
@@ -459,7 +472,7 @@ _log("gaincal: flux_field and gain_field amp+phase...")
 gaincal(vis=visname, caltable=ct_gamp, field=",".join([flux_field, gain_fields]),
         solint=amp_solint, combine=amp_combine, refant=refant,
         gaintype="G", calmode="ap", minblperant=4, minsnr=3.0,
-        gaintable=[ct_delay, ct_bandpass, ct_gphase], parang=True)
+        gaintable=[ct_delay, ct_bandpass, ct_gphase], parang=apply_parang)
 
 # Fluxscale
 _log("fluxscale...")
@@ -486,7 +499,7 @@ applycal(vis=visname,
          gaintable=gaintables,
          interp=interp,
          calwt=calwt,
-         parang=True,
+         parang=apply_parang,
          applymode=apply_mode)
 
 # Optional split of targets
