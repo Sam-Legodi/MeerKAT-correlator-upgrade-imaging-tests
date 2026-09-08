@@ -512,7 +512,7 @@ if do_split:
           keepflags=False)
 
 _log("==============================================")
-_log(" Calibration complete.")
+_log(" Calibration script finished; batch validation determines success.")
 _log(" End: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 _log(" Log: {}".format(logfile))
 _log("==============================================")
