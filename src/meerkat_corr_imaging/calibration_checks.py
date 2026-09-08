@@ -113,6 +113,19 @@ def quality_residual(vis, flux_field, applied_fields):
         tool.done()
 
 
+class CheckedTask(object):
+    """Keep CASA 5 CLI metadata (defaults, parameters, etc.) accessible."""
+    def __init__(self, original, checked):
+        self._original = original
+        self._checked = checked
+
+    def __call__(self, **kwargs):
+        return self._checked(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
 def install_checks(namespace, result):
     quality = os.environ.get('MCI_QUALITY_ENABLED') == '1'
     threshold = float(os.environ.get('MCI_QUALITY_MIN_SOLUTION_FRACTION', '0.95'))
@@ -184,4 +197,4 @@ def install_checks(namespace, result):
                 task = getattr(casatasks, name)
             except ImportError:
                 raise RuntimeError('Missing CASA task: ' + name)
-        namespace[name] = wrap(name, task)
+        namespace[name] = CheckedTask(task, wrap(name, task))
