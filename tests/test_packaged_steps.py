@@ -133,6 +133,8 @@ def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -
         step3_calibrate_image, "_run_cmd",
         lambda cmd, env=None, **kwargs: calls.append((list(cmd), dict(env))),
     )
+    monkeypatch.setattr(step3_calibrate_image, "run_calibration",
+                        lambda cmd, env, *args: calls.append((list(cmd), dict(env))))
     step3_calibrate_image.run(cfg)
 
     assert len(calls) == 4
@@ -143,12 +145,12 @@ def test_casa_step_uses_absolute_packaged_scripts(tmp_path: Path, monkeypatch) -
         assert env["MCI_CASA_SCRIPT_DIR"] == str(script.parent)
         ms = str(tmp_path / ("reference.ms" if index < 2 else "test.ms"))
         if index % 2 == 0:
-            assert script.name == "standalone_xxyy_solve.py"
+            assert script.name == "casa_batch.py"
             assert env["MCI_CAL_MSFILE"] == ms
             assert env["MCI_CAL_REFANT"] == cfg.casa.refant
             assert env["MCI_CAL_FLUX_FIELD"] == cfg.casa.flux_field
         else:
-            assert script.name == "tclean_two_bands.py"
+            assert script.name == "casa_image_batch.py"
             assert command[-1] == env["MCI_TCLEAN_MSFILE"] == ms
 
 
@@ -220,8 +222,10 @@ def test_calibration_only_passes_exclusions(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(step3_calibrate_image, '_run_cmd',
                         lambda cmd, env=None, **kw: calls.append((cmd, env)))
+    monkeypatch.setattr(step3_calibrate_image, 'run_calibration',
+                        lambda cmd, env, *args: calls.append((cmd, env)))
     step3_calibrate_image.run(cfg)
     assert len(calls) == 2
     for cmd, env in calls:
-        assert cmd[-1].endswith('standalone_xxyy_solve.py')
+        assert cmd[-1].endswith('casa_batch.py')
         assert json.loads(env['MCI_CAL_EXCLUDE_FIELDS']) == ['target', '2']

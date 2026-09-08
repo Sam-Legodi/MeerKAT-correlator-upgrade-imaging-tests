@@ -25,6 +25,12 @@ class FrequencyRangesCfg:
 
 @dataclass
 class CasaCfg:
+    quality_check: bool = False
+    quality_min_solution_fraction: float = 0.95
+    quality_max_residual: float = 0.1
+    stage_timeout_seconds: float = 7200
+    timeout_seconds: float = 21600
+    shutdown_timeout_seconds: float = 30
     imaging_enabled: bool = True
     exclude_fields: List[str] = field(default_factory=list)
     calibration_exclude_fields: List[str] = field(default_factory=list)
@@ -251,7 +257,20 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
             raise ValueError("casa." + key + " must be a list of field names or IDs")
     if not isinstance(casa_raw.get("imaging_enabled", True), bool):
         raise ValueError("casa.imaging_enabled must be a boolean")
+    if not isinstance(casa_raw.get("quality_check", False), bool):
+        raise ValueError("casa.quality_check must be a boolean")
+    for key, default in (("stage_timeout_seconds", 7200), ("timeout_seconds", 21600), ("shutdown_timeout_seconds", 30),
+                         ("quality_min_solution_fraction", 0.95), ("quality_max_residual", 0.1)):
+        value = float(casa_raw.get(key, default))
+        if not math.isfinite(value) or value <= 0 or (key == "quality_min_solution_fraction" and value > 1):
+            raise ValueError("Invalid casa." + key)
     casa = CasaCfg(
+        quality_check=casa_raw.get("quality_check", False),
+        quality_min_solution_fraction=float(casa_raw.get("quality_min_solution_fraction", 0.95)),
+        quality_max_residual=float(casa_raw.get("quality_max_residual", 0.1)),
+        stage_timeout_seconds=float(casa_raw.get("stage_timeout_seconds", 7200)),
+        timeout_seconds=float(casa_raw.get("timeout_seconds", 21600)),
+        shutdown_timeout_seconds=float(casa_raw.get("shutdown_timeout_seconds", 30)),
         imaging_enabled=casa_raw.get("imaging_enabled", True),
         exclude_fields=[str(v) for v in casa_raw.get("exclude_fields", [])],
         calibration_exclude_fields=[str(v) for v in casa_raw.get("calibration_exclude_fields", [])],
