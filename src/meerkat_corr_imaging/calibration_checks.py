@@ -40,16 +40,16 @@ def inspect_solutions(path):
 
 def inspect_corrected(vis, fields):
     tool = table_tool()
-    selected = None
     try:
         tool.open(vis)
         if 'CORRECTED_DATA' not in tool.colnames():
             raise RuntimeError('CORRECTED_DATA missing')
-        selected = tool.query('FIELD_ID IN [%s] AND ANTENNA1!=ANTENNA2' % fields)
         counts = {}
         # Bounded sampling per field, rather than loading an entire MS cube.
         for field in fields.split(','):
-            rows = selected.query('FIELD_ID==%s' % field)
+            # CASA 5 cannot reliably query an unnamed temporary query table.
+            # Apply both predicates directly to the open MeasurementSet.
+            rows = tool.query('FIELD_ID==%s AND ANTENNA1!=ANTENNA2' % field)
             try:
                 good_count = 0
                 for row in range(0, rows.nrows(), max(1, rows.nrows() // 256)):
@@ -67,8 +67,6 @@ def inspect_corrected(vis, fields):
                 rows.close()
         return counts
     finally:
-        if selected is not None:
-            selected.close()
         tool.done()
 
 
