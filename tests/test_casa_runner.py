@@ -116,3 +116,52 @@ def test_stage_timeout():
     with pytest.raises(TimeoutError, match='stage'):
         supervise([sys.executable, '-u', '-c', "import time; print('[CAL TASK] Starting gaincal'); time.sleep(30)"],
                   dict(os.environ, MCI_STAGE_TIMEOUT_SECONDS='0.1'), timeout=5)
+
+
+def test_casa5_task_metadata_survives_wrapper():
+    from types import SimpleNamespace
+    from meerkat_corr_imaging.calibration_checks import install_checks
+    names = ('delmod','setjy','gaincal','bandpass','fluxscale','polcal','applycal','split')
+    ns = {name: lambda **kw: None for name in names}
+    ns['casalog'] = SimpleNamespace(logfile=lambda: None)
+    class Casa5Task:
+        parameters = {'vis': ''}
+        def defaults(self, key, frame):
+            assert key == 'paramkeys'
+            return ['vis']
+        def __call__(self, **kwargs):
+            # CASA 5 update_params resolves metadata through the task registry.
+            assert ns['delmod'].defaults('paramkeys', ns) == ['vis']
+            assert ns['delmod'].parameters == {'vis': ''}
+            return None
+    ns['delmod'] = Casa5Task()
+    result = {'tasks': []}
+    install_checks(ns, result)
+    ns['delmod'](vis='test.ms')
+    assert result['tasks'][0]['status'] == 'passed'
+
+
+def test_task_error_survives_shutdown_timeout(tmp_path):
+    script = "import os,json,time; json.dump(dict(run_id=os.environ['MCI_RUN_ID'],ms='x',error='delmod metadata failed'),open(os.environ['MCI_RESULT_PATH'],'w')); time.sleep(30)"
+    with pytest.raises(RuntimeError, match='delmod metadata failed.*shutdown'):
+        run_calibration([sys.executable, '-c', script], dict(os.environ, MCI_CAL_MSFILE='x'), tmp_path, 3, .1)
+
+
+def test_batch_isolates_solver_globals(tmp_path):
+    from pathlib import Path
+    import subprocess
+    import meerkat_corr_imaging.casa_runner as runner
+    bootstrap = Path(runner.__file__).with_name('casa_batch.py')
+    (tmp_path/'calibration_checks.py').write_text(
+        "def install_checks(namespace, result):\n    namespace['validation'] = result\n")
+    script = tmp_path/'solver.py'
+    script.write_text("validation['calibration_applied'] = True\nresult = {}\ncode = 99\n")
+    result_path = tmp_path/'result.json'
+    env = dict(os.environ, MCI_RUN_ID='test', MCI_CAL_MSFILE='x',
+               MCI_CASA_SCRIPT_DIR=str(tmp_path), MCI_BATCH_SCRIPT=str(script),
+               MCI_RESULT_PATH=str(result_path))
+    process = subprocess.run([sys.executable, str(bootstrap)], env=env,
+                             capture_output=True, timeout=5)
+    assert process.returncode == 0, process.stderr
+    result = json.loads(result_path.read_text())
+    assert result['run_id'] == 'test' and result['calibration_applied']
