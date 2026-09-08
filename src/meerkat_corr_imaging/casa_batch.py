@@ -14,11 +14,13 @@ try:
     checks = {'__name__': 'calibration_checks'}
     with open(helper, 'rb') as handle:
         exec(compile(handle.read(), helper, 'exec'), checks)
-    checks['install_checks'](globals(), result)
+    # Keep CASA's original task registry and bootstrap state intact.
+    script_namespace = dict(globals())
+    checks['install_checks'](script_namespace, result)
     script = os.environ['MCI_BATCH_SCRIPT']
-    globals()['__file__'] = script
+    script_namespace['__file__'] = script
     with open(script, 'rb') as handle:
-        exec(compile(handle.read(), script, 'exec'), globals())
+        exec(compile(handle.read(), script, 'exec'), script_namespace)
     if not result['calibration_applied']:
         raise RuntimeError('Script ended without validated calibration application')
     code = 0
