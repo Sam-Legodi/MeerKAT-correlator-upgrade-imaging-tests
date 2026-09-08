@@ -78,7 +78,21 @@ def run_calibration(command, env, reports_dir, timeout, shutdown_timeout):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory.resolve() / (run_id + '.json')
     env.update(MCI_RUN_ID=run_id, MCI_RESULT_PATH=str(path))
-    supervise(command, env, timeout, shutdown_timeout)
+    try:
+        supervise(command, env, timeout, shutdown_timeout)
+    except Exception as exc:
+        # A failed task may be followed by CASA shutdown/pipe trouble. Preserve
+        # its authenticated result rather than replacing it with a timeout.
+        if path.is_file():
+            try:
+                failure = json.loads(path.read_text())
+            except (ValueError, OSError):
+                failure = {}
+            if (failure.get('run_id') == run_id and
+                    failure.get('ms') == env['MCI_CAL_MSFILE'] and failure.get('error')):
+                raise RuntimeError('CASA calibration failed: ' + str(failure['error']) +
+                                   '; process supervision: ' + str(exc)) from exc
+        raise
     if not path.is_file():
         raise RuntimeError('CASA exited without a calibration result')
     result = json.loads(path.read_text())
