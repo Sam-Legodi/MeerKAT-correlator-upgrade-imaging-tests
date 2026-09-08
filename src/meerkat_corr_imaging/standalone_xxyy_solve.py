@@ -104,17 +104,6 @@ def linfit(xInput, xDataList, yDataList):
     yPredict = y_predict(xInput)
     return yPredict
 
-def fit_flux_model(nu, flux_jy, nu0, order=3):
-    """Convert log10(S) samples to CASA manual fluxdensity/spix form."""
-    lnunu0 = np.log10(nu / nu0)
-    log_flux = np.log10(flux_jy)
-    degree = min(order, max(0, len(np.unique(lnunu0)) - 1))
-    poly = np.polyfit(lnunu0, log_flux, degree)
-    coeffs = np.zeros(order + 1)
-    coeffs[:degree + 1] = poly[::-1]
-    fluxdensity = 10 ** coeffs[0]
-    return [nu0, fluxdensity] + coeffs[1:].tolist()
-
 def _selected_spw_ids(nspw, spw_selection):
     if not spw_selection:
         return list(range(nspw))
@@ -148,16 +137,19 @@ def j0408_flux_model_from_msmd(msmd_tool, spw_selection=""):
         raise ValueError("No finite channel frequencies found in SPECTRAL_WINDOW.")
     freq_hz = np.unique(freq_hz)
 
-    mhz = 1e6
+    # Source: MeerCals/fluxcal/J0408_model.py and
+    # J0408_flux_model_comparison.ipynb (0408-65, epoch 2016).
+    # log10(S/Jy) = a + b*x + c*x**2 + d*x**3, x = log10(nu/MHz).
+    # Expand exactly about the MS reference frequency: x = x0 + log10(nu/nu0).
+    # This preserves the supplied cubic even for fewer than four channels,
+    # without a numerical fit or a SciPy dependency inside CASA.
+    if np.any(freq_hz <= 0):
+        raise ValueError("Channel frequencies must be positive for the J0408 flux model.")
     a, b, c, d = -0.9790, 3.3662, -1.1216, 0.0861
-    flux_jy = 10 ** (
-        a
-        + b * np.log10(freq_hz / mhz)
-        + c * np.log10(freq_hz / mhz) ** 2
-        + d * np.log10(freq_hz / mhz) ** 3
-    )
-    reffreq = float(np.nanmedian(freq_hz))
-    return fit_flux_model(freq_hz, flux_jy, reffreq, order=3)
+    reffreq = float(np.median(freq_hz))
+    x0 = np.log10(reffreq / 1e6)
+    fluxdensity = 10 ** (a + b*x0 + c*x0**2 + d*x0**3)
+    return [reffreq, fluxdensity, b + 2*c*x0 + 3*d*x0**2, c + 3*d*x0, d]
 
 def do_setjy(visname, spw, fields, standard, dopol=False, createmms=True):
     """
@@ -167,25 +159,21 @@ def do_setjy(visname, spw, fields, standard, dopol=False, createmms=True):
     # Use global CASA task 'delmod'
     delmod(vis=visname)  # clear existing model (prevents exit code 1)
 
-    fluxlist = ["J0408-6545", "0408-6545", ""]
+    fluxlist = ["J0408-6545", "0408-6545"]
     ismms = createmms
 
     if msmd is None:
         raise RuntimeError("msmetadata tool unavailable in this CASA build.")
     msmd.open(visname)
-    fnames = fields.fluxfield.split(",")
-    for fname in fnames:
-        if fname.isdigit():
-            fname = msmd.namesforfields(int(fname))
-
+    selectors = [value.strip() for value in fields.fluxfield.split(",")]
+    setjyname = selectors[0]
     do_manual = False
-    for ff in fluxlist:
-        if ff in fnames:
-            setjyname = ff
+    for selector in selectors:
+        names = msmd.namesforfields(int(selector)) if selector.isdigit() else [selector]
+        if any(name in fluxlist for name in names):
+            setjyname = selector
             do_manual = True
             break
-        else:
-            setjyname = fields.fluxfield.split(",")[0]
 
     if do_manual:
         reffreq_hz, fluxdensity, spix0, spix1, spix2 = j0408_flux_model_from_msmd(msmd, spw)
