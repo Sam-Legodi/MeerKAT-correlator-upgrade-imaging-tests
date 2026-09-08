@@ -840,6 +840,16 @@ roughly 256 rows per selected field, including all channels/correlations in each
 sample. A column's existence alone never passes validation. Table reports record
 usable solutions by antenna/SPW/field; partial coverage is reported.
 
+The `cal` step uses the J0408-6545 epoch-2016 flux model from
+`MeerCals/fluxcal/J0408_model.py` and `J0408_flux_model_comparison.ipynb`:
+`log10(S/Jy) = -0.9790 + 3.3662*x - 1.1216*x^2 + 0.0861*x^3`,
+where `x = log10(frequency/MHz)`. For `casa.flux_field` set to `J0408-6545`,
+`0408-6545`, or its numeric MS field ID, `setjy` uses `standard="manual"`,
+channel-dependent scaling, and zero Stokes Q/U/V. The cubic is converted
+algebraically to CASA `spix` coefficients at the median channel frequency of
+the selected SPWs, preserving the supplied spectrum across UHF, L and S bands.
+Other flux calibrators use the configured CASA standard.
+
 Enabling `quality_check` additionally checks the usable solution fraction in each
 output table and the median fractional complex residual versus MODEL_DATA on
 sampled flux-calibrator cross-correlations. It enables scratch models in setjy.
