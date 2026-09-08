@@ -8,9 +8,10 @@ from ..audit import (
     record_failure,
     record_skip,
     register_inputs,
-    run_logged_command,
 )
 from ..config import Config
+from ..casa_runner import run_calibration, supervise
+from ..audit import current_audit
 
 def _run_cmd(
     cmd: List[str],
@@ -18,7 +19,13 @@ def _run_cmd(
     *,
     inputs: Iterable[str] = (),
 ):
-    return run_logged_command(cmd, prefix="[CAL/IMAGING]", inputs=inputs, env=env)
+    print("[CAL/IMAGING] -> " + " ".join(cmd), flush=True)
+    supervise(cmd, env, float(env.get("MCI_TIMEOUT_SECONDS", 21600)),
+              float(env.get("MCI_SHUTDOWN_TIMEOUT_SECONDS", 30)))
+    audit = current_audit()
+    if audit is not None:
+        for item in inputs:
+            audit.succeeded(item)
 
 def run(cfg: Config):
     """
@@ -32,6 +39,9 @@ def run(cfg: Config):
     solve_script = package_dir / "standalone_xxyy_solve.py"
     tclean_env = os.environ.copy()
     tclean_env["MCI_CASA_SCRIPT_DIR"] = str(package_dir)
+    tclean_env["MCI_TIMEOUT_SECONDS"] = str(cfg.casa.timeout_seconds)
+    tclean_env["MCI_SHUTDOWN_TIMEOUT_SECONDS"] = str(cfg.casa.shutdown_timeout_seconds)
+    tclean_env["MCI_IMAGE_BATCH_SCRIPT"] = str(tclean_script)
     tclean_env["MCI_TCLEAN_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.imaging_exclude_fields)
     tclean_env["MCI_TCLEAN_FIELD"] = cfg.casa.field
     tclean_env["MCI_TCLEAN_DATACOL"] = cfg.casa.datacolumn
@@ -79,11 +89,18 @@ def run(cfg: Config):
                 solve_env["MCI_CAL_EXCLUDE_FIELDS"] = json.dumps(cfg.casa.exclude_fields + cfg.casa.calibration_exclude_fields)
                 solve_env["MCI_CAL_REFANT"] = cfg.casa.refant
                 solve_env["MCI_CAL_FLUX_FIELD"] = cfg.casa.flux_field
-                _run_cmd(
-                    [casa_bin, "--nologger", "--log2term", "-c", str(solve_script)],
-                    env=solve_env,
-                    inputs=[ms],
-                )
+                solve_env["MCI_STAGE_TIMEOUT_SECONDS"] = str(cfg.casa.stage_timeout_seconds)
+                solve_env["MCI_BATCH_SCRIPT"] = str(solve_script)
+                solve_env["MCI_QUALITY_ENABLED"] = "1" if cfg.casa.quality_check else "0"
+                solve_env["MCI_QUALITY_MIN_SOLUTION_FRACTION"] = str(cfg.casa.quality_min_solution_fraction)
+                solve_env["MCI_QUALITY_MAX_RESIDUAL"] = str(cfg.casa.quality_max_residual)
+                command = [casa_bin, "--nologger", "--log2term", "--nogui", "-c", str(package_dir / "casa_batch.py")]
+                print("[CAL/IMAGING] -> " + " ".join(command), flush=True)
+                run_calibration(command, solve_env, cfg.paths.reports_dir,
+                                cfg.casa.timeout_seconds, cfg.casa.shutdown_timeout_seconds)
+                audit = current_audit()
+                if audit is not None:
+                    audit.succeeded(ms)
             if not cfg.casa.imaging_enabled:
                 print(f"[CAL/IMAGING] Imaging disabled for {ms}")
                 continue
@@ -95,7 +112,7 @@ def run(cfg: Config):
                     "--nologger",
                     "--log2term",
                     "-c",
-                    str(tclean_script),
+                    str(package_dir / "casa_image_batch.py"),
                     *scans_arg,
                     ms,
                 ],

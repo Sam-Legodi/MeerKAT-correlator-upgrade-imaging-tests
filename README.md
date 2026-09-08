@@ -813,3 +813,49 @@ sets `parang=False` on gain, bandpass and application tasks. The decision uses
 all rows of `POLARIZATION.CORR_TYPE` separately for each MS. Leakage solving
 and application are skipped for these inputs because cross-hands are absent.
 Other correlation layouts retain the existing calibration behavior.
+
+### Validated CASA batch calibration
+
+Every requested calibration (`extra.force_calibrate: true`) now runs through a
+batch bootstrap with stdin disconnected, streamed output and a 30-second
+heartbeat. CASA exits explicitly after writing its result, including on failure.
+Application checks cannot be disabled: task failures and relevant CASA log errors
+stop dependent tasks; calibration tables must contain finite unflagged solutions;
+selected fields must contain finite unflagged corrected samples. The known
+leap-second-table warning is excluded from fatal task-log checks.
+
+```yaml
+casa:
+  quality_check: false                 # optional; default off
+  quality_min_solution_fraction: 0.95
+  quality_max_residual: 0.10
+  stage_timeout_seconds: 7200          # limit per calibration task
+  timeout_seconds: 21600               # total CASA runtime, not inactivity
+  shutdown_timeout_seconds: 30         # exit deadline after result appears
+```
+
+“Calibration applied successfully” means these execution/output checks passed,
+not that scientific quality is certified. Corrected-data validation samples up to
+roughly 256 rows per selected field, including all channels/correlations in each
+sample. A column's existence alone never passes validation. Table reports record
+usable solutions by antenna/SPW/field; partial coverage is reported.
+
+Enabling `quality_check` additionally checks the usable solution fraction in each
+output table and the median fractional complex residual versus MODEL_DATA on
+sampled flux-calibrator cross-correlations. It enables scratch models in setjy.
+“Calibration quality passed” means only these configured checks passed, not an
+independent flux-scale or target-image validation. Tune thresholds for your
+observation. Keep the flux calibrator among the applied fields when enabling QA.
+
+Run-specific JSON results live in `paths.reports_dir/calibration_results`.
+The CLI requires a successful process exit and matching validated result before
+starting imaging or marking the MS successful. A quality failure retains the
+successful application status in JSON but fails the requested pipeline operation.
+Calibration still requires `force_calibrate`; this change does not recalibrate
+inputs when that option is disabled.
+
+Validated application uses CASA `applymode='calflagstrict'`: samples lacking
+applicable calibration solutions are flagged. This replaces the former `calonly`
+behavior so uncalibrated samples cannot count as usable corrected samples. Review
+flagging changes alongside the result. Imaging also runs in a finite batch
+process with disconnected stdin, a runtime limit, and explicit exit.
