@@ -90,6 +90,7 @@ def test_application_and_quality_are_separate(monkeypatch, tmp_path):
         ns['applycal'](vis='x', field='0')
     assert result['calibration_applied'] is True
     assert result['quality'] == 'failed'
+    assert any('0.5' in reason and '0.1' in reason for reason in result['quality_failure_reasons'])
 
 
 @pytest.mark.parametrize('flags,empty', [([True, True], False), ([], True)])
@@ -165,3 +166,9 @@ def test_batch_isolates_solver_globals(tmp_path):
     assert process.returncode == 0, process.stderr
     result = json.loads(result_path.read_text())
     assert result['run_id'] == 'test' and result['calibration_applied']
+
+
+def test_exited_process_with_inherited_stdout():
+    # Reproduce CASA helpers keeping the parent's pipe open after its exit.
+    script = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); print('finished',flush=True)"
+    supervise([sys.executable, '-c', script], dict(os.environ), timeout=2)
