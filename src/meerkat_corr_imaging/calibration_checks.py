@@ -170,6 +170,7 @@ def install_checks(namespace, result):
                     if any(term in line.lower() for term in ('calibration apply', 'flagged', 'jones'))]
                 result['calibration_applied'] = True
                 print('Calibration applied successfully (task/output checks; sampled data validation).')
+                sys.stdout.flush()
                 if quality:
                     fractions = [entry['usable_fraction'] for entry in result['solution_tables']]
                     result['quality'] = 'failed'
@@ -179,8 +180,21 @@ def install_checks(namespace, result):
                     result['quality_metrics'] = {'minimum_solution_fraction': min(fractions) if fractions else 0,
                                                  'required_fraction': threshold, 'median_fractional_residual': residual, 'maximum_residual': limit}
                     result['quality'] = 'passed' if passed else 'failed'
+                    reasons = []
+                    if not fractions:
+                        reasons.append('no solution tables available')
+                    for entry in result['solution_tables']:
+                        if entry['usable_fraction'] < threshold:
+                            reasons.append('%s usable solution fraction %.6g < %.6g' %
+                                           (entry.get('path', 'unnamed table'), entry['usable_fraction'], threshold))
+                    if not np.isfinite(residual) or residual > limit:
+                        reasons.append('median fractional complex residual %.6g exceeds limit %.6g or is nonfinite' % (residual, limit))
+                    result['quality_failure_reasons'] = reasons
+                    print('[CAL QUALITY] minimum solution fraction=%s (required >= %s); median residual=%s (required <= %s)' %
+                          (min(fractions) if fractions else 0, threshold, residual, limit))
+                    sys.stdout.flush()
                     if not passed:
-                        raise RuntimeError('Calibration quality failed: solution coverage or calibrator residual threshold')
+                        raise RuntimeError('Calibration quality failed: ' + '; '.join(reasons))
                     print('Calibration quality passed (configured solution coverage and sampled calibrator residual checks).')
             result['tasks'].append({'name': name, 'seconds': time.time()-started, 'status': 'passed'})
             print('[CAL TASK] Finished ' + name)

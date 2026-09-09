@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -74,6 +75,7 @@ class StepAudit:
         self.outcomes: "OrderedDict[str, InputOutcome]" = OrderedDict()
         self.error_lines: list[str] = []
         self.skipped_reasons: list[str] = []
+        self.duration_seconds: Optional[float] = None
 
     @staticmethod
     def _normal_path(value: str) -> Optional[str]:
@@ -179,6 +181,11 @@ class StepAudit:
                 f"{len(succeeded)} succeeded, {len(failed)} failed, {len(not_run)} not run"
             ),
         ]
+        if self.duration_seconds is not None:
+            seconds = self.duration_seconds
+            hours, remainder = divmod(int(seconds), 3600)
+            minutes, whole_seconds = divmod(remainder, 60)
+            lines.insert(3, f"[AUDIT] Duration: {hours:02d}:{minutes:02d}:{whole_seconds:02d} ({seconds:.3f} seconds)")
         if succeeded:
             lines.append("[AUDIT] Succeeded inputs:")
             lines.extend(f"  SUCCESS  {label}" for label, _ in succeeded)
@@ -322,11 +329,14 @@ def run_step_with_audit(
         token = _CURRENT_AUDIT.set(audit)
         try:
             with contextlib.redirect_stdout(stdout_tee), contextlib.redirect_stderr(stderr_tee):
-                print(f"[AUDIT] Starting step: {step_name}")
+                started = time.monotonic()
+                print(f"[AUDIT] Starting step: {step_name}", flush=True)
                 try:
                     result = runner()
                 except BaseException as exc:
                     exception = exc
+                finally:
+                    audit.duration_seconds = time.monotonic() - started
                 logfile.flush()
                 audit.audit_log()
                 audit.print_summary(exception)

@@ -36,7 +36,16 @@ def supervise(command, env, timeout=21600, shutdown_timeout=30, heartbeat=30):
             if now-last >= heartbeat:
                 print(f'[CASA] {stage}; elapsed {now-start:.0f}s', flush=True)
                 last = now
-            for key, _ in selector.select(timeout=0.2):
+            events = selector.select(timeout=0.2)
+            if not events and process.poll() is not None:
+                # CASA has exited and buffered output is drained. A helper may
+                # still hold the pipe open; do not mistake it for a running task.
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                break
+            for key, _ in events:
                 data = os.read(key.fd, 65536)
                 if data:
                     decoded = data.decode('utf-8', errors='replace')
@@ -90,8 +99,8 @@ def run_calibration(command, env, reports_dir, timeout, shutdown_timeout):
                 failure = {}
             if (failure.get('run_id') == run_id and
                     failure.get('ms') == env['MCI_CAL_MSFILE'] and failure.get('error')):
-                raise RuntimeError('CASA calibration failed: ' + str(failure['error']) +
-                                   '; process supervision: ' + str(exc)) from exc
+                raise RuntimeError(('Calibration applied successfully; quality/validation failed: ' if failure.get('calibration_applied') else 'CASA calibration failed: ') + str(failure['error']) +
+                                   '; result: ' + str(path) + '; process supervision: ' + str(exc)) from exc
         raise
     if not path.is_file():
         raise RuntimeError('CASA exited without a calibration result')

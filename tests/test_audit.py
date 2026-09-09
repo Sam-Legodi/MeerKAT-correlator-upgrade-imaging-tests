@@ -175,3 +175,23 @@ def test_cli_all_audits_each_step_immediately(monkeypatch, tmp_path: Path) -> No
         "ran second",
         "audit end second_step",
     ]
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_step_duration_on_success_and_failure(tmp_path, monkeypatch, capsys, fails):
+    from meerkat_corr_imaging import audit
+    ticks = iter([100.0, 3761.25])
+    monkeypatch.setattr(audit.time, 'monotonic', lambda: next(ticks))
+    def runner():
+        if fails:
+            raise RuntimeError('test failure')
+        return 'done'
+    if fails:
+        with pytest.raises(RuntimeError, match='test failure'):
+            audit.run_step_with_audit('step3_calibration_imaging', tmp_path, runner)
+    else:
+        assert audit.run_step_with_audit('step2_visibility_qa', tmp_path, runner) == 'done'
+    expected = '[AUDIT] Duration: 01:01:01 (3661.250 seconds)'
+    assert expected in capsys.readouterr().out
+    log = next((tmp_path/'pipeline_audits').glob('*.log'))
+    assert expected in log.read_text()
