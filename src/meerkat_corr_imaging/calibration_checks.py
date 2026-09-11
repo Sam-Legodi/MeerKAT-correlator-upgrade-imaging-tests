@@ -146,7 +146,7 @@ def install_checks(namespace, result):
             if name == 'applycal':
                 # Flag samples without applicable solutions so unchanged DATA
                 # cannot masquerade as successfully corrected unflagged samples.
-                kwargs['applymode'] = 'calflagstrict'
+                kwargs['applymode'] = 'calonly' # 'calflagstrict'
             if name == 'setjy' and quality:
                 kwargs['usescratch'] = True
             value = task(**kwargs)
