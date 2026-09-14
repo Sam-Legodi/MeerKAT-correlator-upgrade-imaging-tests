@@ -334,6 +334,8 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         xmatch=XMatchCfg(**d.get("xmatch", {})),
         extra=merged_extra,
     )
+    from .uncertainty import UncertaintyConfig
+    UncertaintyConfig.from_mapping(cfg.extra.get("uncertainty"))
     return cfg
 
 def load_config(path: str | Path) -> Config:

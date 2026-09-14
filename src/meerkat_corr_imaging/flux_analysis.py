@@ -14,6 +14,8 @@ import argparse
 import builtins
 import glob
 import os
+from pathlib import Path
+from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -27,6 +29,8 @@ from docx.shared import Inches  # noqa: E402
 from docx.oxml import OxmlElement  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
 
+from .uncertainty import (UncertaintyConfig, column, enrich_matches, describe, bootstrap,
+    format_uncertainty, write_json, linear_fit)
 from .output_paths import draft_docx_path, save_report
 
 
@@ -66,16 +70,14 @@ def _safe_arr(values: Sequence) -> np.ndarray:
     """Convert an input column/sequence to a float numpy array, unwrapping Quantities/masked arrays."""
     if hasattr(values, "to_value"):
         values = values.to_value()
-    arr = np.asarray(values)
-    if np.ma.isMaskedArray(arr):
-        arr = arr.filled(np.nan)
+    arr = np.ma.filled(np.ma.asarray(values, dtype=float), np.nan)
     return arr.astype(float, copy=False)
 
 
 def _col_or_default(tab: Table, colname: str, *, like: Optional[np.ndarray] = None) -> np.ndarray:
     """Return named column as float ndarray if present, else NaNs with the same shape as `like`."""
     if colname in tab.colnames:
-        return _safe_arr(tab[colname])
+        return column(tab, colname, error=colname.startswith("E_"))
     like_arr = _safe_arr(like) if like is not None else np.array([], dtype=float)
     return np.full_like(like_arr, np.nan, dtype=float)
 
@@ -136,44 +138,26 @@ def _fmt_stat(arr: np.ndarray, func, fmt: str = "{:.6g}", default: str = "nan") 
     return fmt.format(value)
 
 
-def _summary_rows(
-    label: str,
-    frac: np.ndarray,
-    ratio: Optional[np.ndarray] = None,
-    gain: Optional[Tuple[float, str]] = None,
-) -> List[List[str]]:
-    """Build a summary table (as rows) for DOCX output."""
-    frac = np.asarray(frac, dtype=float)
-    frac_finite = frac[np.isfinite(frac)]
-    rows: List[List[str]] = [["metric", f"{label}: value"]]
-    rows.append(["N (finite frac)", str(frac_finite.size)])
-    rows.append(["mean(frac)", _fmt_stat(frac_finite, np.nanmean)])
-    rows.append(["std(frac)", _fmt_stat(frac_finite, np.nanstd)])
-    rows.append(["median(frac)", _fmt_stat(frac_finite, np.nanmedian)])
-    rows.append(["p16(frac)", _fmt_stat(frac_finite, lambda a: np.nanpercentile(a, 16))])
-    rows.append(["p84(frac)", _fmt_stat(frac_finite, lambda a: np.nanpercentile(a, 84))])
-
+def _summary_rows(label, frac, ratio=None, gain=None, *, statistics=None):
+    """Format precomputed numerical summaries; old callers remain supported."""
+    statistics = statistics or {"fractional_difference": describe(frac),
+                                "ratio": describe(ratio if ratio is not None else [])}
+    rows = [["metric", f"{label}: value"], ["N (finite frac)", str(np.isfinite(frac).sum())]]
+    for key in ("mean", "std", "median", "p16", "p84"):
+        info = statistics["fractional_difference"][key]
+        rows.append([f"{key}(frac)", format_uncertainty(info['value'], info)])
     if ratio is not None:
-        ratio = np.asarray(ratio, dtype=float)
-        ratio_finite = ratio[np.isfinite(ratio)]
-        rows.append(["N (finite ratio)", str(ratio_finite.size)])
-        rows.append(["median(ratio)", _fmt_stat(ratio_finite, np.nanmedian)])
-        rows.append(
-            [
-                "NMAD(ratio)",
-                _fmt_stat(
-                    ratio_finite,
-                    lambda a: 1.4826 * np.nanmedian(np.abs(a - np.nanmedian(a))),
-                ),
-            ]
-        )
-
-    if gain is not None:
-        g, note = gain
-        rows.append(["gain (through-origin LS)", f"{g:.6g}"])
-        rows.append(["gain notes", note])
-
+        for key in ("median", "nmad"):
+            info = statistics["ratio"][key]
+            rows.append([f"{key}(ratio)", format_uncertainty(info['value'], info)])
+    if "gain" in statistics:
+        fit = statistics["gain"]
+        rows.append(["gain (through-origin)", format_uncertainty(fit['slope'], fit['uncertainties'].get('slope'))])
+        rows.append(["gain notes", fit['method']])
+    elif gain is not None:
+        rows.append(["gain (through-origin)", format_uncertainty(gain[0])])
     return rows
+
 
 def _set_table_borders(table, width_pt: float = 1.0, color: str = "000000") -> None:
     """Ensure DOCX table borders are visible with the requested width."""
@@ -292,14 +276,10 @@ def _robust_linfit(
         return (np.nan, np.nan, np.nan, np.nan, np.zeros(n, dtype=bool))
 
     base_weights = np.ones_like(x)
-    if yerr is not None:
-        finite_err = np.isfinite(yerr)
-        if np.any(finite_err):
-            base_weights[finite_err] = 1.0 / np.clip(yerr[finite_err], 1.0e-8, None) ** 2
-            if np.any(~finite_err):
-                base_weights[~finite_err] = builtins.max(base_weights[finite_err])
-        else:
-            yerr = None
+    if yerr is not None and np.all(np.isfinite(yerr) & (yerr > 0)):
+        base_weights = 1 / yerr**2
+    else:
+        yerr = None  # screening only; scientific fit below uses complete error rows
 
     weights = base_weights.copy()
     intercept = np.nan
@@ -359,6 +339,7 @@ def _plot_flux_comparison(
     xlabel: str,
     ylabel: str,
     out_path: str,
+    uncertainty_config=None,
 ) -> Dict[str, float]:
     """Scatter plot with robust linear fit, returning fit metadata."""
     plt.figure(figsize=(6.6, 5.5))
@@ -370,6 +351,7 @@ def _plot_flux_comparison(
 
     if xerr is not None:
         xerr = np.asarray(xerr, dtype=float).ravel()
+        xerr = np.where(np.isfinite(xerr) & (xerr > 0), xerr, np.nan)
         if xerr.size == ref_arr.size:
             xerr_valid = xerr[mask]
         else:
@@ -379,6 +361,7 @@ def _plot_flux_comparison(
 
     if yerr is not None:
         yerr = np.asarray(yerr, dtype=float).ravel()
+        yerr = np.where(np.isfinite(yerr) & (yerr > 0), yerr, np.nan)
         if yerr.size == ref_arr.size:
             yerr_valid = yerr[mask]
         else:
@@ -424,6 +407,11 @@ def _plot_flux_comparison(
             intercept = np.nan
             slope_err = np.nan
             intercept_err = np.nan
+    fitted = linear_fit(ref_valid[inlier_mask], test_valid[inlier_mask],
+        None if xerr_valid is None else xerr_valid[inlier_mask],
+        None if yerr_valid is None else yerr_valid[inlier_mask], uncertainty_config)
+    slope, intercept = fitted['slope'], fitted['intercept']
+    slope_err, intercept_err = fitted['slope_err'], fitted['intercept_err']
     outlier_mask = ~inlier_mask
     if ref_valid.size:
         vals = np.concatenate([np.abs(ref_valid), np.abs(test_valid)])
@@ -471,12 +459,8 @@ def _plot_flux_comparison(
                 lim = 1.05 * builtins.max(lim, float(np.nanmax(np.abs(y_finite))))
                 x_vals = np.array([0.0, lim])
                 y_vals = slope * x_vals + intercept
-        if np.isfinite(slope_err) and np.isfinite(intercept_err):
-            label = (
-                f"Fit: y=({slope:.2f}+/-{slope_err:.2f})x + ({intercept:.2g}+/-{intercept_err:.2g})"
-            )
-        else:
-            label = f"Fit: y={slope:.2f}x + {intercept:.2g}"
+        label = ('Fit slope: ' + format_uncertainty(slope, fitted['uncertainties'].get('slope'))
+                 + '\nintercept: ' + format_uncertainty(intercept, fitted['uncertainties'].get('intercept')))
         plt.plot(x_vals, y_vals, color="C1", lw=1.4, label=label)
 
     plt.xlabel(xlabel)
@@ -489,6 +473,7 @@ def _plot_flux_comparison(
     _save_fig(out_path)
 
     return {
+        **fitted,
         "slope": float(slope),
         "intercept": float(intercept),
         "slope_err": float(slope_err),
@@ -505,6 +490,7 @@ def compare_fluxes_across_band_and_scans(
     *,
     scans_glob: Optional[str] = None,
     docx_name: Optional[str] = None,
+    uncertainty_config: UncertaintyConfig | None = None,
 ) -> Dict[str, object]:
     """
     Compare source fluxes between reference and (low/high/full-band) catalogues and build a report.
@@ -513,25 +499,41 @@ def compare_fluxes_across_band_and_scans(
     outdir = _ensure_dir(os.path.join(parent, "crossmatched-fluxes"))
     print(f"\n**** Output directory: {outdir}")
 
-    t_low = Table.read(ref_low_xmatch)
-    t_high = Table.read(ref_high_xmatch)
-    t_mfs = Table.read(ref_mfs_xmatch)
+    uc = uncertainty_config or UncertaintyConfig()
+    t_low = enrich_matches(Table.read(ref_low_xmatch), uc)
+    t_high = enrich_matches(Table.read(ref_high_xmatch), uc)
+    t_mfs = enrich_matches(Table.read(ref_mfs_xmatch), uc)
+    statistics = {}
+    matched_outputs = []
+    from .xmatch_pybdsf import sanitize_fits_meta
+    for label, tab in (("low", t_low), ("high", t_high), ("mfs", t_mfs)):
+        matched_path = Path(outdir) / (Path({"low": ref_low_xmatch, "high": ref_high_xmatch, "mfs": ref_mfs_xmatch}[label]).stem + "_uncertainties.fits")
+        sanitize_fits_meta(tab).write(matched_path, overwrite=True)
+        matched_outputs.append(str(matched_path))
+        for kind, short in (("peak", "pk"), ("total", "tot")):
+            ratio_values = column(tab, f"{kind}_flux_ratio")
+            statistics[f"{label}_{short}"] = {
+                "ratio": describe(ratio_values, uc),
+                "fractional_difference": describe(ratio_values-1, uc),
+                "gain": linear_fit(column(tab, f"{kind}_flux_1"), column(tab, f"{kind}_flux_2"),
+                    column(tab, f"{kind}_flux_err_1"), column(tab, f"{kind}_flux_err_2"), uc, through_origin=True)}
+
 
     # Peak flux comparisons
-    R_low_pk = _safe_arr(t_low["Peak_flux_1"])
-    T_low_pk = _safe_arr(t_low["Peak_flux_2"])
-    Re_low_pk = _col_or_default(t_low, "E_Peak_flux_1", like=R_low_pk)
-    Te_low_pk = _col_or_default(t_low, "E_Peak_flux_2", like=T_low_pk)
+    R_low_pk = _safe_arr(t_low["peak_flux_1"])
+    T_low_pk = _safe_arr(t_low["peak_flux_2"])
+    Re_low_pk = _col_or_default(t_low, "peak_flux_err_1", like=R_low_pk)
+    Te_low_pk = _col_or_default(t_low, "peak_flux_err_2", like=T_low_pk)
 
-    R_high_pk = _safe_arr(t_high["Peak_flux_1"])
-    T_high_pk = _safe_arr(t_high["Peak_flux_2"])
-    Re_high_pk = _col_or_default(t_high, "E_Peak_flux_1", like=R_high_pk)
-    Te_high_pk = _col_or_default(t_high, "E_Peak_flux_2", like=T_high_pk)
+    R_high_pk = _safe_arr(t_high["peak_flux_1"])
+    T_high_pk = _safe_arr(t_high["peak_flux_2"])
+    Re_high_pk = _col_or_default(t_high, "peak_flux_err_1", like=R_high_pk)
+    Te_high_pk = _col_or_default(t_high, "peak_flux_err_2", like=T_high_pk)
 
-    R_mfs_pk = _safe_arr(t_mfs["Peak_flux_1"])
-    T_mfs_pk = _safe_arr(t_mfs["Peak_flux_2"])
-    Re_mfs_pk = _col_or_default(t_mfs, "E_Peak_flux_1", like=R_mfs_pk)
-    Te_mfs_pk = _col_or_default(t_mfs, "E_Peak_flux_2", like=T_mfs_pk)
+    R_mfs_pk = _safe_arr(t_mfs["peak_flux_1"])
+    T_mfs_pk = _safe_arr(t_mfs["peak_flux_2"])
+    Re_mfs_pk = _col_or_default(t_mfs, "peak_flux_err_1", like=R_mfs_pk)
+    Te_mfs_pk = _col_or_default(t_mfs, "peak_flux_err_2", like=T_mfs_pk)
 
     frac_low_pk = _frac_diff(R_low_pk, T_low_pk)
     frac_high_pk = _frac_diff(R_high_pk, T_high_pk)
@@ -541,9 +543,9 @@ def compare_fluxes_across_band_and_scans(
     ratio_high_pk = _ratio(T_high_pk, R_high_pk)
     ratio_mfs_pk = _ratio(T_mfs_pk, R_mfs_pk)
 
-    gain_low_pk = _gain_slope_through_origin(R_low_pk, T_low_pk, Re_low_pk, Te_low_pk)
-    gain_high_pk = _gain_slope_through_origin(R_high_pk, T_high_pk, Re_high_pk, Te_high_pk)
-    gain_mfs_pk = _gain_slope_through_origin(R_mfs_pk, T_mfs_pk, Re_mfs_pk, Te_mfs_pk)
+    gain_low_pk = (statistics["low_pk"]["gain"]["slope"], statistics["low_pk"]["gain"]["method"])
+    gain_high_pk = (statistics["high_pk"]["gain"]["slope"], statistics["high_pk"]["gain"]["method"])
+    gain_mfs_pk = (statistics["mfs_pk"]["gain"]["slope"], statistics["mfs_pk"]["gain"]["method"])
 
     # Total (integrated) flux comparisons (optional)
     has_low_total = {"Total_flux_1", "Total_flux_2"}.issubset(t_low.colnames)
@@ -551,39 +553,39 @@ def compare_fluxes_across_band_and_scans(
     has_mfs_total = {"Total_flux_1", "Total_flux_2"}.issubset(t_mfs.colnames)
 
     if has_low_total:
-        R_low_tot = _safe_arr(t_low["Total_flux_1"])
-        T_low_tot = _safe_arr(t_low["Total_flux_2"])
-        Re_low_tot = _col_or_default(t_low, "E_Total_flux_1", like=R_low_tot)
-        Te_low_tot = _col_or_default(t_low, "E_Total_flux_2", like=T_low_tot)
+        R_low_tot = _safe_arr(t_low["total_flux_1"])
+        T_low_tot = _safe_arr(t_low["total_flux_2"])
+        Re_low_tot = _col_or_default(t_low, "total_flux_err_1", like=R_low_tot)
+        Te_low_tot = _col_or_default(t_low, "total_flux_err_2", like=T_low_tot)
         frac_low_tot = _frac_diff(R_low_tot, T_low_tot)
         ratio_low_tot = _ratio(T_low_tot, R_low_tot)
-        gain_low_tot = _gain_slope_through_origin(R_low_tot, T_low_tot, Re_low_tot, Te_low_tot)
+        gain_low_tot = (statistics["low_tot"]["gain"]["slope"], statistics["low_tot"]["gain"]["method"])
     else:
         R_low_tot = T_low_tot = Re_low_tot = Te_low_tot = np.array([])
         frac_low_tot = ratio_low_tot = np.array([])
         gain_low_tot = (np.nan, "Total_flux_* not present in lowband table")
 
     if has_high_total:
-        R_high_tot = _safe_arr(t_high["Total_flux_1"])
-        T_high_tot = _safe_arr(t_high["Total_flux_2"])
-        Re_high_tot = _col_or_default(t_high, "E_Total_flux_1", like=R_high_tot)
-        Te_high_tot = _col_or_default(t_high, "E_Total_flux_2", like=T_high_tot)
+        R_high_tot = _safe_arr(t_high["total_flux_1"])
+        T_high_tot = _safe_arr(t_high["total_flux_2"])
+        Re_high_tot = _col_or_default(t_high, "total_flux_err_1", like=R_high_tot)
+        Te_high_tot = _col_or_default(t_high, "total_flux_err_2", like=T_high_tot)
         frac_high_tot = _frac_diff(R_high_tot, T_high_tot)
         ratio_high_tot = _ratio(T_high_tot, R_high_tot)
-        gain_high_tot = _gain_slope_through_origin(R_high_tot, T_high_tot, Re_high_tot, Te_high_tot)
+        gain_high_tot = (statistics["high_tot"]["gain"]["slope"], statistics["high_tot"]["gain"]["method"])
     else:
         R_high_tot = T_high_tot = Re_high_tot = Te_high_tot = np.array([])
         frac_high_tot = ratio_high_tot = np.array([])
         gain_high_tot = (np.nan, "Total_flux_* not present in highband table")
 
     if has_mfs_total:
-        R_mfs_tot = _safe_arr(t_mfs["Total_flux_1"])
-        T_mfs_tot = _safe_arr(t_mfs["Total_flux_2"])
-        Re_mfs_tot = _col_or_default(t_mfs, "E_Total_flux_1", like=R_mfs_tot)
-        Te_mfs_tot = _col_or_default(t_mfs, "E_Total_flux_2", like=T_mfs_tot)
+        R_mfs_tot = _safe_arr(t_mfs["total_flux_1"])
+        T_mfs_tot = _safe_arr(t_mfs["total_flux_2"])
+        Re_mfs_tot = _col_or_default(t_mfs, "total_flux_err_1", like=R_mfs_tot)
+        Te_mfs_tot = _col_or_default(t_mfs, "total_flux_err_2", like=T_mfs_tot)
         frac_mfs_tot = _frac_diff(R_mfs_tot, T_mfs_tot)
         ratio_mfs_tot = _ratio(T_mfs_tot, R_mfs_tot)
-        gain_mfs_tot = _gain_slope_through_origin(R_mfs_tot, T_mfs_tot, Re_mfs_tot, Te_mfs_tot)
+        gain_mfs_tot = (statistics["mfs_tot"]["gain"]["slope"], statistics["mfs_tot"]["gain"]["method"])
     else:
         R_mfs_tot = T_mfs_tot = Re_mfs_tot = Te_mfs_tot = np.array([])
         frac_mfs_tot = ratio_mfs_tot = np.array([])
@@ -607,6 +609,7 @@ def compare_fluxes_across_band_and_scans(
         title="Reference vs Lowband: Peak Flux",
         xlabel="Reference peak flux [Jy/beam]",
         ylabel="Lowband peak flux [Jy/beam]",
+        uncertainty_config=uc,
         out_path=fig_peak_low,
     )
 
@@ -619,6 +622,7 @@ def compare_fluxes_across_band_and_scans(
         title="Reference vs Highband: Peak Flux",
         xlabel="Reference peak flux [Jy/beam]",
         ylabel="Highband peak flux [Jy/beam]",
+        uncertainty_config=uc,
         out_path=fig_peak_high,
     )
 
@@ -631,6 +635,7 @@ def compare_fluxes_across_band_and_scans(
         title="Reference vs Full-band (MFS): Peak Flux",
         xlabel="Reference peak flux [Jy/beam]",
         ylabel="Full-band peak flux [Jy/beam]",
+        uncertainty_config=uc,
         out_path=fig_peak_mfs,
     )
 
@@ -667,7 +672,8 @@ def compare_fluxes_across_band_and_scans(
             title="Reference vs Lowband: Total Flux",
             xlabel="Reference total flux [Jy]",
             ylabel="Lowband total flux [Jy]",
-            out_path=fig_total_low,
+            uncertainty_config=uc,
+        out_path=fig_total_low,
         )
 
     if has_high_total:
@@ -680,7 +686,8 @@ def compare_fluxes_across_band_and_scans(
             title="Reference vs Highband: Total Flux",
             xlabel="Reference total flux [Jy]",
             ylabel="Highband total flux [Jy]",
-            out_path=fig_total_high,
+            uncertainty_config=uc,
+        out_path=fig_total_high,
         )
 
     if has_mfs_total:
@@ -693,7 +700,8 @@ def compare_fluxes_across_band_and_scans(
             title="Reference vs Full-band (MFS): Total Flux",
             xlabel="Reference total flux [Jy]",
             ylabel="Full-band total flux [Jy]",
-            out_path=fig_total_mfs,
+            uncertainty_config=uc,
+        out_path=fig_total_mfs,
         )
 
     if has_low_total or has_high_total or has_mfs_total:
@@ -717,6 +725,7 @@ def compare_fluxes_across_band_and_scans(
         _save_fig(fig_total_hist)
 
     # Optional per-scan analysis (peak only)
+    scan_statistics = []
     scan_rows = None
     fig_scan = None
     if scans_glob:
@@ -725,17 +734,22 @@ def compare_fluxes_across_band_and_scans(
         scan_mean: List[float] = []
         scan_std: List[float] = []
         scan_n: List[int] = []
+        scan_intervals = []
         for path in scan_paths:
             try:
-                table = Table.read(path)
-                R = _safe_arr(table["Peak_flux_1"])
-                T = _safe_arr(table["Peak_flux_2"])
+                table = enrich_matches(Table.read(path), uc)
+                R = _safe_arr(table["peak_flux_1"])
+                T = _safe_arr(table["peak_flux_2"])
                 frac = _frac_diff(R, T)
+                info = describe(frac, uc)
+                scan_statistics.append({"path": path, "statistics": info})
+                scan_intervals.append(info['mean'])
                 scan_ids.append(os.path.basename(path))
                 scan_mean.append(float(np.nanmean(frac)))
                 scan_std.append(float(np.nanstd(frac)))
                 scan_n.append(int(np.isfinite(frac).sum()))
             except Exception:
+                scan_intervals.append({})
                 scan_ids.append(os.path.basename(path) + " [read_error]")
                 scan_mean.append(np.nan)
                 scan_std.append(np.nan)
@@ -745,35 +759,38 @@ def compare_fluxes_across_band_and_scans(
             fig_scan = os.path.join(outdir, "per_scan_fracdiff_peak.png")
             plt.figure(figsize=(builtins.max(7.0, 0.25 * len(scan_ids)), 5.2))
             x = np.arange(len(scan_ids))
-            plt.errorbar(x, scan_mean, yerr=scan_std, fmt="o", capsize=2)
+            plt.plot(x, scan_mean, 'o')
+            for i, info in enumerate(scan_intervals):
+                if info.get('ci_low') is not None:
+                    plt.vlines(i, info['ci_low'], info['ci_high'], color='C0')
             plt.axhline(0, color="k", ls="--", lw=1)
             plt.xticks(x, [sid[:30] for sid in scan_ids], rotation=60, ha="right")
             plt.ylabel("(Test − Ref) / Ref")
-            plt.title("Per-scan fractional peak-flux difference (mean ± 1σ)")
+            plt.title("Per-scan mean fractional peak-flux difference (sampling CI)")
             plt.grid(ls=":", alpha=0.4)
             _save_fig(fig_scan)
 
             scan_rows = [["scan_id", "N", "mean_fracdiff", "std_fracdiff"]]
-            for sid, n, m, s in zip(scan_ids, scan_n, scan_mean, scan_std):
-                scan_rows.append([sid, str(n), f"{m:.6g}", f"{s:.6g}"])
+            for sid, n, m, scatter, info in zip(scan_ids, scan_n, scan_mean, scan_std, scan_intervals):
+                scan_rows.append([sid, str(n), format_uncertainty(m, info), f"{scatter:.6g} (source scatter)"])
 
     # Summary rows
-    rows_low_pk = _summary_rows("Lowband (Peak)", frac_low_pk, ratio_low_pk, gain_low_pk)
-    rows_high_pk = _summary_rows("Highband (Peak)", frac_high_pk, ratio_high_pk, gain_high_pk)
-    rows_mfs_pk = _summary_rows("Full-band MFS (Peak)", frac_mfs_pk, ratio_mfs_pk, gain_mfs_pk)
+    rows_low_pk = _summary_rows("Lowband (Peak)", frac_low_pk, ratio_low_pk, gain_low_pk, statistics=statistics["low_pk"])
+    rows_high_pk = _summary_rows("Highband (Peak)", frac_high_pk, ratio_high_pk, gain_high_pk, statistics=statistics["high_pk"])
+    rows_mfs_pk = _summary_rows("Full-band MFS (Peak)", frac_mfs_pk, ratio_mfs_pk, gain_mfs_pk, statistics=statistics["mfs_pk"])
 
     rows_low_tot = (
-        _summary_rows("Lowband (Total)", frac_low_tot, ratio_low_tot, gain_low_tot)
+        _summary_rows("Lowband (Total)", frac_low_tot, ratio_low_tot, gain_low_tot, statistics=statistics["low_tot"])
         if has_low_total
         else [["metric", "Lowband (Total): value"], ["note", "Total_flux_* not available"]]
     )
     rows_high_tot = (
-        _summary_rows("Highband (Total)", frac_high_tot, ratio_high_tot, gain_high_tot)
+        _summary_rows("Highband (Total)", frac_high_tot, ratio_high_tot, gain_high_tot, statistics=statistics["high_tot"])
         if has_high_total
         else [["metric", "Highband (Total): value"], ["note", "Total_flux_* not available"]]
     )
     rows_mfs_tot = (
-        _summary_rows("Full-band MFS (Total)", frac_mfs_tot, ratio_mfs_tot, gain_mfs_tot)
+        _summary_rows("Full-band MFS (Total)", frac_mfs_tot, ratio_mfs_tot, gain_mfs_tot, statistics=statistics["mfs_tot"])
         if has_mfs_total
         else [["metric", "Full-band MFS (Total): value"], ["note", "Total_flux_* not available"]]
     )
@@ -787,23 +804,47 @@ def compare_fluxes_across_band_and_scans(
     if scans_glob:
         doc.add_paragraph(f"Scan pattern (peak per-scan): {scans_glob}")
     doc.add_paragraph(
-        "Assuming the reference flux is the ground truth, this report analyses fractional differences "
+        "Treating both reference and test fluxes as uncertain measurements, this report analyses fractional differences "
         "(test − ref)/ref, flux ratios (test/ref), through-origin gain estimates, and robust "
         "linear fits (with inliers/outliers separated)."
     )
 
+    doc.add_paragraph(f"Intervals are {100*uc.confidence_level:.2f}% confidence (default 68.27%, approximately 1 sigma). "
+        "Brackets give absolute endpoints. Individual flux and ratio bars propagate catalogue errors. "
+        "Aggregate intervals resample matched sources; fitted intervals include both-axis ODR covariance where available. "
+        "Fits condition on the displayed inlier selection. Source scatter is not uncertainty of a mean.")
+    # Ratio error bars retain uncertainties upstream in the FITS sidecars.
+    fig_ratio = os.path.join(outdir, 'flux_ratio_uncertainties.png')
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7))
+    for ax, kind in zip(axes, ('total', 'peak')):
+        offset = 0
+        for label, tab in (("low", t_low), ("high", t_high), ("mfs", t_mfs)):
+            values = column(tab, f'{kind}_flux_ratio')
+            errors = column(tab, f'{kind}_flux_ratio_err')
+            ax.errorbar(np.arange(len(tab))+offset, values, yerr=errors, fmt='.', alpha=.6, label=label)
+            offset += len(tab)
+        ax.axhline(1, color='black', ls='--')
+        ax.set_ylabel(f'{kind} test/reference')
+        ax.legend()
+    axes[-1].set_xlabel('Matched-source index (bands concatenated)')
+    fig.tight_layout()
+    fig.savefig(fig_ratio, dpi=150)
+    plt.close(fig)
+    doc.add_picture(fig_ratio, width=Inches(6.5))
+    _docx_add_caption(doc, 'Per-source total and peak ratios with propagated 1-sigma measurement errors; unavailable errors have no bars.')
+
     peak_figures = [
         (
             fig_peak_low,
-            "Reference vs Lowband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
+            "Reference vs Lowband peak flux with robust linear fit (legend lists slope/intercept confidence intervals fitted to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_high,
-            "Reference vs Highband peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
+            "Reference vs Highband peak flux with robust linear fit (legend lists slope/intercept confidence intervals fitted to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_mfs,
-            "Reference vs Full-band (MFS) peak flux with robust linear fit (legend lists slope/intercept +/- 1 sigma fit to inliers; dashed line marks y = x).",
+            "Reference vs Full-band (MFS) peak flux with robust linear fit (legend lists slope/intercept confidence intervals fitted to inliers; dashed line marks y = x).",
         ),
         (
             fig_peak_hist,
@@ -819,21 +860,21 @@ def compare_fluxes_across_band_and_scans(
 
     if fig_scan and os.path.exists(fig_scan):
         doc.add_picture(fig_scan, width=Inches(6.5))
-        _docx_add_caption(doc, f"Figure {fig_counter}: Per-scan mean ± 1σ of fractional peak-flux difference.")
+        _docx_add_caption(doc, f"Figure {fig_counter}: Per-scan mean fractional peak-flux difference with sampling confidence intervals.")
         fig_counter += 1
 
     total_figures = [
         (
             fig_total_low,
-            "Figure T1: Reference vs Lowband total flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Figure T1: Reference vs Lowband total flux with robust linear fit (legend lists slope/intercept confidence intervals; dashed line marks y = x).",
         ),
         (
             fig_total_high,
-            "Figure T2: Reference vs Highband total flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Figure T2: Reference vs Highband total flux with robust linear fit (legend lists slope/intercept confidence intervals; dashed line marks y = x).",
         ),
         (
             fig_total_mfs,
-            "Figure T3: Reference vs Full-band (MFS) total flux with robust linear fit (legend lists slope/intercept +/- 1 sigma; dashed line marks y = x).",
+            "Figure T3: Reference vs Full-band (MFS) total flux with robust linear fit (legend lists slope/intercept confidence intervals; dashed line marks y = x).",
         ),
         (
             fig_total_hist,
@@ -859,9 +900,17 @@ def compare_fluxes_across_band_and_scans(
         doc.add_heading("Per-scan fractional difference (Peak)", level=1)
         _add_table(doc, scan_rows, "Table S1: Per-scan metrics of (test − ref)/ref for peak flux.")
 
+    numeric = {"uncertainty_config": asdict(uc), "statistics": statistics,
+        "scans": scan_statistics, "matched_sources": matched_outputs,
+        "fits": {"peak_low": fit_low_pk, "peak_high": fit_high_pk, "peak_mfs": fit_mfs_pk,
+                 "total_low": fit_total_low, "total_high": fit_total_high, "total_mfs": fit_total_mfs}}
+    metrics_path = Path(report_docx).with_suffix('.json')
+    write_json(metrics_path, numeric)
     save_report(doc, report_docx)
 
     return {
+        "metrics": numeric,
+        "metrics_path": str(metrics_path),
         "outdir": outdir,
         "report_docx": report_docx,
         "plots_peak": [
@@ -931,6 +980,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional custom DOCX filename (default auto-generated under crossmatched-fluxes/).",
     )
+    parser.add_argument('--bootstrap-samples', type=int, default=5000)
+    parser.add_argument('--confidence-level', type=float, default=0.6826894921370859)
+    parser.add_argument('--random-seed', type=int, default=20260911)
     return parser
 
 
@@ -944,6 +996,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.ref_mfs_xmatch,
         scans_glob=args.scans_glob,
         docx_name=args.docx_name,
+        uncertainty_config=UncertaintyConfig(args.bootstrap_samples, args.confidence_level, args.random_seed),
     )
 
     print("**** DOCX report :", result["report_docx"])

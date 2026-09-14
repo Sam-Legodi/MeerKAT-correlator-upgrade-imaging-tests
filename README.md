@@ -869,3 +869,80 @@ applicable calibration solutions are flagged. This replaces the former `calonly`
 behavior so uncalibrated samples cannot count as usable corrected samples. Review
 flagging changes alongside the result. Imaging also runs in a finite batch
 process with disconnected stdin, a runtime limit, and explicit exit.
+
+### Measurement errors and 1-sigma acceptance
+
+The comparison stages preserve PyBDSF formal errors, normalize their units, and
+write numerical uncertainties into matched FITS tables and JSON sidecars. Existing
+configurations use these defaults:
+
+```yaml
+extra:
+  uncertainty:
+    bootstrap_samples: 5000
+    confidence_level: 0.6826894921370859  # central Gaussian +/-1 sigma
+    random_seed: 20260911
+```
+
+`pos` and `flux` pass these settings to the packaged analysis commands; the same
+commands accept `--bootstrap-samples`, `--confidence-level`, and `--random-seed`.
+The consolidated report reads the mapping directly. All counts must be integers;
+resample count must be at least two. Use at least 5000 for production reports.
+
+Individual flux ratios propagate both catalogue errors. Spherical astrometry
+propagates coordinate covariance, including the RA cos(dec) projection. At small
+radial offsets Gaussian coordinate Monte Carlo replaces the singular linear
+radial approximation. Rigid fits use positional covariance when at least ten
+complete-error matches exist; otherwise they retain an unweighted fit with
+sampling errors. Formal parameter covariance, bootstrap covariance, fit method,
+inlier mask and residual errors are retained numerically. Residual errors include
+the correlation with parameters estimated from those same sources.
+
+Catalogue statistics use paired-source percentile bootstrap intervals. For
+consolidated separation/flux aggregates, independent Gaussian measurement-error
+Monte Carlo on the fixed matched population is also retained when all required
+formal errors exist. The adopted bounds enclose both intervals: they preserve a
+measurement-error floor without adding noise twice. These are conservative
+sensitivity bounds, not exact combined-coverage confidence intervals. Missing
+formal errors leave explicitly labelled sampling-only intervals. Proportions use
+Wilson intervals, including all-zero/all-one samples. Fewer than two independent
+samples cannot establish a sampling interval. P16/P84 and source standard
+deviations describe the population's scatter; they are not errors on its median
+or mean.
+
+**Acceptance uses 1-sigma bounds.** Numerical limits remain unchanged: raw
+positional p95 <1 arcsec, median integrated flux ratio strictly inside 0.95–1.05,
+and RMS(test)/RMS(reference) <1.2. Pass requires the central estimate and complete
+68.27% decision interval to satisfy the limit. Touching/crossing a limit is Concern.
+Missing decision uncertainty is Not assessed. JSON retains both `point_status`
+and `status`, interval bounds and decision reason. Changing the displayed
+confidence level does not change the decision confidence of 68.27%.
+
+Image RMS is the existing annular `1.4826*MAD` estimator. Its sampling standard
+error uses the Gaussian MAD asymptotic variance and effective independent beam
+count from FITS BMAJ/BMIN and WCS pixel area, capped at the sampled pixel count.
+Missing beam/area information or fewer than two effective samples makes its
+uncertainty unavailable. This model assumes stationary, locally Gaussian noise;
+PB variation, sidelobes and correlated calibration systematics can dominate its
+formal error. The RMS ratio propagates independent image-scale errors.
+
+Detailed flux reports use both-axis ODR plus paired-source bootstrap intervals
+for fitted gains/slopes/intercepts. Detailed position reports include sampling
+intervals for offset, harmonic and circular summaries. All matched-source fields
+remain numerical; report formatting uses `value ± error` only for nearly symmetric
+intervals and `value [lower, upper]` otherwise.
+
+Visibility dataset comparison CSV/JSON products include whole-scan cluster
+bootstrap intervals for median amplitude, spectral RMS, oscillation, flagging
+fraction, and B-minus-A differences (the existing CLI uses A=test, B=reference) when each dataset has two or more
+scans. This preserves dependence within each scan and assumes independent scans.
+Per-spectrum measurement errors remain unavailable without spectral covariance;
+exact flag census and CASA operational checks retain their existing semantics.
+External notebook-generated diagnostic figures are embedded as supplied, without
+invented uncertainty annotations.
+
+See [the metric audit and assumptions](docs/uncertainty-audit.md) for the full
+metric-to-source map and limitations. Catalogue resampling conditions on matching,
+quality cuts and inlier selection; it cannot correct association mistakes,
+selection truncation or common calibration systematics. Input catalogues currently
+contain no cross-source or cross-dataset covariance.

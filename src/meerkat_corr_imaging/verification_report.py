@@ -8,7 +8,7 @@ states.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import math
 from pathlib import Path
@@ -32,6 +32,10 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from .uncertainty import (UncertaintyConfig, ONE_SIGMA, column, enrich_matches,
+    bootstrap, wilson, ratio_error, measurement, decision, position_covariance,
+    format_uncertainty, write_json, catalogue_intervals)
+from .astrometry import fit_rigid
 from .config import Config
 from .output_paths import draft_docx_path, save_report
 
@@ -61,6 +65,16 @@ class RigidFit:
     postfit_median_arcsec: float
     postfit_p95_arcsec: float
     n_inliers: int
+    uncertainties: dict = field(default_factory=dict)
+    parameter_covariance: list | None = None
+    bootstrap_parameter_covariance: list | None = None
+    covariance_parameter_order: list = field(default_factory=list)
+    fit_method: str = ""
+    inlier_mask: list = field(default_factory=list)
+    residual_arcsec: list = field(default_factory=list)
+    residual_err_arcsec: list = field(default_factory=list)
+    residual_ci_low_arcsec: list = field(default_factory=list)
+    residual_ci_high_arcsec: list = field(default_factory=list)
 
 
 @dataclass
@@ -88,6 +102,10 @@ class BandResult:
     test_rms_jy_per_beam: float | None
     rms_ratio: float | None
     rms_status: str
+    uncertainties: dict = field(default_factory=dict)
+    decisions: dict = field(default_factory=dict)
+    uncertainty_provenance: dict = field(default_factory=dict)
+    matched_sources_output: str | None = None
 
 
 def _finite(value: float | None) -> bool:
@@ -148,8 +166,8 @@ def _quality_rows(table: Table) -> Table:
         code = f"S_Code_{suffix}"
         if code in table.colnames:
             mask &= np.asarray(table[code]).astype(str) == "S"
-        peak = np.asarray(table[f"Peak_flux_{suffix}"], dtype=float)
-        error = np.asarray(table[f"E_Peak_flux_{suffix}"], dtype=float)
+        peak = column(table, f"Peak_flux_{suffix}", u.Jy/u.beam)
+        error = column(table, f"E_Peak_flux_{suffix}", u.Jy/u.beam, error=True)
         mask &= (
             np.isfinite(peak)
             & np.isfinite(error)
@@ -157,6 +175,8 @@ def _quality_rows(table: Table) -> Table:
             & (error > 0)
             & (peak / error >= 10.0)
         )
+        for coordinate in ("RA", "DEC"):
+            mask &= np.isfinite(column(table, f"{coordinate}_{suffix}", u.deg))
     return table[mask]
 
 
@@ -174,64 +194,12 @@ def _fit_rigid_once(reference_xy: np.ndarray, test_xy: np.ndarray) -> tuple[np.n
     return rotation, translation
 
 
-def fit_rigid_transform(
-    reference_xy: np.ndarray,
-    test_xy: np.ndarray,
-    *,
-    bootstrap_samples: int = 400,
-    random_seed: int = 20260901,
-) -> RigidFit:
-    """Fit a translation and one scale-fixed rotation with robust clipping."""
-
-    reference_xy = np.asarray(reference_xy, dtype=float)
-    test_xy = np.asarray(test_xy, dtype=float)
-    if reference_xy.shape != test_xy.shape or reference_xy.ndim != 2 or reference_xy.shape[1] != 2:
-        raise ValueError("reference_xy and test_xy must be matching N x 2 arrays")
-    if len(reference_xy) < MIN_QUALITY_MATCHES:
-        raise ValueError(f"at least {MIN_QUALITY_MATCHES} matches are required")
-
-    keep = np.ones(len(reference_xy), dtype=bool)
-    for _ in range(6):
-        rotation, translation = _fit_rigid_once(reference_xy[keep], test_xy[keep])
-        prediction = (rotation @ reference_xy.T).T + translation
-        residual = np.linalg.norm(test_xy - prediction, axis=1)
-        median = float(np.median(residual[keep]))
-        sigma = 1.4826 * float(np.median(np.abs(residual[keep] - median)))
-        new_keep = residual <= median + 4.0 * max(sigma, 1e-6)
-        if np.array_equal(new_keep, keep) or int(np.sum(new_keep)) < MIN_QUALITY_MATCHES:
-            break
-        keep = new_keep
-
-    rotation, translation = _fit_rigid_once(reference_xy[keep], test_xy[keep])
-    prediction = (rotation @ reference_xy.T).T + translation
-    residual = np.linalg.norm(test_xy - prediction, axis=1)
-    angle = math.degrees(math.atan2(rotation[1, 0], rotation[0, 0]))
-
-    angle_uncertainty = float("nan")
-    inlier_reference = reference_xy[keep]
-    inlier_test = test_xy[keep]
-    if bootstrap_samples > 1 and len(inlier_reference) >= MIN_QUALITY_MATCHES:
-        rng = np.random.default_rng(random_seed)
-        angles = np.empty(bootstrap_samples, dtype=float)
-        for index in range(bootstrap_samples):
-            sample = rng.integers(0, len(inlier_reference), len(inlier_reference))
-            sample_rotation, _ = _fit_rigid_once(
-                inlier_reference[sample], inlier_test[sample]
-            )
-            angles[index] = math.degrees(
-                math.atan2(sample_rotation[1, 0], sample_rotation[0, 0])
-            )
-        angle_uncertainty = float(np.std(angles, ddof=1))
-
-    return RigidFit(
-        rotation_deg=float(angle),
-        rotation_uncertainty_deg=angle_uncertainty,
-        translation_east_arcsec=float(translation[0]),
-        translation_north_arcsec=float(translation[1]),
-        postfit_median_arcsec=float(np.median(residual[keep])),
-        postfit_p95_arcsec=float(np.percentile(residual[keep], 95)),
-        n_inliers=int(np.sum(keep)),
-    )
+def fit_rigid_transform(reference_xy, test_xy, *, bootstrap_samples=5000,
+                        random_seed=20260911, confidence_level=ONE_SIGMA,
+                        reference_covariance=None, test_covariance=None) -> RigidFit:
+    return RigidFit(**fit_rigid(reference_xy, test_xy,
+        UncertaintyConfig(bootstrap_samples, confidence_level, random_seed),
+        reference_covariance, test_covariance, MIN_QUALITY_MATCHES))
 
 
 def _phase_center(path: str | Path) -> SkyCoord:
@@ -245,6 +213,8 @@ def _robust_rms(
     inner_deg: float = RMS_ANNULUS_DEG[0],
     outer_deg: float = RMS_ANNULUS_DEG[1],
     stride: int = 3,
+    return_details: bool = False,
+    uncertainty_config: UncertaintyConfig | None = None,
 ) -> float:
     """Measure 1.4826*MAD in a fixed phase-centred annulus."""
 
@@ -273,7 +243,30 @@ def _robust_rms(
     if selected.size == 0:
         raise ValueError(f"no finite pixels in RMS annulus for {path}")
     median = float(np.median(selected))
-    return 1.4826 * float(np.median(np.abs(selected - median)))
+    value = 1.4826 * float(np.median(np.abs(selected - median)))
+    if not return_details:
+        return value
+    # For Gaussian samples, median(|X|) has density 2 phi(q)/sigma
+    # at q=Phi^-1(.75); quantile variance gives SE(MAD)/sigma ~1.166/sqrt(N).
+    from scipy.stats import norm
+    beam_major, beam_minor = header.get("BMAJ", np.nan), header.get("BMIN", np.nan)
+    beam_area = np.pi * beam_major * beam_minor / (4*np.log(2))
+    pixel_area = abs(np.linalg.det(wcs.pixel_scale_matrix))
+    effective = None
+    error = None
+    reason = "missing/invalid synthesized beam area or pixel area"
+    if np.isfinite([beam_major, beam_minor, pixel_area]).all() and min(beam_major, beam_minor, pixel_area) > 0:
+        effective = min(float(selected.size), float(selected.size*stride**2*pixel_area/beam_area))
+        reason = "fewer than two effective independent beams"
+        if effective >= 2:
+            error = value * 1.4826 / (4*norm.pdf(norm.ppf(.75))*np.sqrt(effective))
+            reason = None
+    info = measurement(value, error, uncertainty_config, method="Gaussian MAD asymptotic SE; effective independent beam count")
+    info.update(n_pixels=int(selected.size), effective_independent_beams=effective,
+                assumptions="locally Gaussian stationary noise; Gaussian beam correlation area; source-contamination/systematic uncertainty excluded")
+    if reason:
+        info["reason"] = reason
+    return value, info
 
 
 def _catalogue_counts(cfg: Config) -> dict[str, tuple[int | None, int | None]]:
@@ -312,6 +305,8 @@ def _band_inputs(cfg: Config) -> list[dict[str, str]]:
 def _score_band(
     item: dict[str, str],
     catalogue_counts: tuple[int | None, int | None],
+    uncertainty_config: UncertaintyConfig | None = None,
+    matched_output: Path | None = None,
 ) -> BandResult:
     reference_state = _correction_state(item["reference_image"])
     test_state = _correction_state(item["test_image"])
@@ -321,7 +316,15 @@ def _score_band(
             f"reference={reference_state}, test={test_state}"
         )
 
-    table = Table.read(item["xmatch_table"])
+    uc = uncertainty_config or UncertaintyConfig()
+    uncertainties = {}
+    table = enrich_matches(Table.read(item["xmatch_table"]), uc)
+    table["analysis_row_index"] = np.arange(len(table))
+    if matched_output is not None:
+        matched_output.parent.mkdir(parents=True, exist_ok=True)
+        from .xmatch_pybdsf import sanitize_fits_meta
+        sanitize_fits_meta(table).write(matched_output, overwrite=True)
+
     quality = _quality_rows(table)
     enough = len(quality) >= MIN_QUALITY_MATCHES
     separation_median = separation_p95 = separation_max = None
@@ -329,8 +332,8 @@ def _score_band(
     total_ratio_median = total_p95 = total_fraction = peak_ratio_median = None
 
     if enough:
-        reference_coord = SkyCoord(quality["RA_1"], quality["DEC_1"], unit="deg")
-        test_coord = SkyCoord(quality["RA_2"], quality["DEC_2"], unit="deg")
+        reference_coord = SkyCoord(column(quality,"RA_1",u.deg), column(quality,"DEC_1",u.deg), unit="deg")
+        test_coord = SkyCoord(column(quality,"RA_2",u.deg), column(quality,"DEC_2",u.deg), unit="deg")
         separation = reference_coord.separation(test_coord).arcsec
         separation_median = float(np.median(separation))
         separation_p95 = float(np.percentile(separation, 95))
@@ -341,10 +344,22 @@ def _score_band(
         test_east, test_north = center.spherical_offsets_to(test_coord)
         reference_xy = np.column_stack((ref_east.arcsec, ref_north.arcsec))
         test_xy = np.column_stack((test_east.arcsec, test_north.arcsec))
-        rigid_fit = fit_rigid_transform(reference_xy, test_xy)
+        def phase_cov(suffix):
+            n = len(quality)
+            errors = np.column_stack((np.zeros(n), np.zeros(n),
+                column(quality, f"E_RA_{suffix}", u.deg, error=True),
+                column(quality, f"E_DEC_{suffix}", u.deg, error=True)))
+            return position_covariance(np.full(n, center.ra.deg), np.full(n, center.dec.deg),
+                column(quality, f"RA_{suffix}", u.deg), column(quality, f"DEC_{suffix}", u.deg), errors)
+        try:
+            rigid_fit = fit_rigid_transform(reference_xy, test_xy,
+                **asdict(uc), reference_covariance=phase_cov("1"), test_covariance=phase_cov("2"))
+        except ValueError:
+            # Raw astrometry remains assessable for degenerate fit geometry.
+            rigid_fit = None
 
-        reference_total = np.asarray(quality["Total_flux_1"], dtype=float)
-        test_total = np.asarray(quality["Total_flux_2"], dtype=float)
+        reference_total = column(quality, "Total_flux_1", u.Jy)
+        test_total = column(quality, "Total_flux_2", u.Jy)
         valid_total = (
             np.isfinite(reference_total)
             & np.isfinite(test_total)
@@ -357,8 +372,8 @@ def _score_band(
             total_p95 = float(np.percentile(np.abs(total_ratio - 1.0), 95))
             total_fraction = float(np.mean(np.abs(total_ratio - 1.0) > FLUX_LIMIT_FRACTION))
 
-        reference_peak = np.asarray(quality["Peak_flux_1"], dtype=float)
-        test_peak = np.asarray(quality["Peak_flux_2"], dtype=float)
+        reference_peak = column(quality, "Peak_flux_1", u.Jy/u.beam)
+        test_peak = column(quality, "Peak_flux_2", u.Jy/u.beam)
         valid_peak = (
             np.isfinite(reference_peak)
             & np.isfinite(test_peak)
@@ -369,9 +384,38 @@ def _score_band(
         if peak_ratio.size:
             peak_ratio_median = float(np.median(peak_ratio))
 
-    reference_rms = _robust_rms(item["reference_image"])
-    test_rms = _robust_rms(item["test_image"])
-    rms_ratio = test_rms / reference_rms if reference_rms > 0 else None
+    if enough:
+        uncertainties.update(catalogue_intervals(quality, uc))
+
+    for prefix in ("reference", "test"):
+        try:
+            value, info = _robust_rms(item[f"{prefix}_image"], return_details=True, uncertainty_config=uc)
+        except ValueError as exc:
+            value, info = None, {"reason": str(exc), "ci_low": None, "ci_high": None}
+        uncertainties[f"{prefix}_rms_jy_per_beam"] = info
+        if prefix == "reference":
+            reference_rms = value
+        else:
+            test_rms = value
+    rms_ratio = test_rms/reference_rms if _finite(test_rms) and _finite(reference_rms) and reference_rms > 0 else None
+    _, rms_error = ratio_error(test_rms, reference_rms,
+        uncertainties["test_rms_jy_per_beam"].get("standard_error"),
+        uncertainties["reference_rms_jy_per_beam"].get("standard_error"))
+    uncertainties["rms_ratio"] = measurement(rms_ratio if rms_ratio is not None else np.nan, float(rms_error), uc)
+    decisions = {
+        "position": decision(separation_p95, uncertainties.get("separation_p95_arcsec"), POSITION_LIMIT_ARCSEC),
+        "flux": decision(total_ratio_median, uncertainties.get("total_flux_ratio_median"), FLUX_LIMIT_FRACTION, target=1.),
+        "rms": decision(rms_ratio, uncertainties.get("rms_ratio"), RMS_RATIO_LIMIT),
+    }
+    # A configured reporting confidence may differ, but acceptance is always 1 sigma.
+    if uc.confidence_level != ONE_SIGMA:
+        decision_cfg = UncertaintyConfig(uc.bootstrap_samples, ONE_SIGMA, uc.random_seed)
+        if enough:
+            decision_intervals = catalogue_intervals(quality, decision_cfg)
+            decisions["position"] = decision(separation_p95, decision_intervals['separation_p95_arcsec'], POSITION_LIMIT_ARCSEC)
+            if total_ratio.size:
+                decisions["flux"] = decision(total_ratio_median, decision_intervals['total_flux_ratio_median'], FLUX_LIMIT_FRACTION, target=1.)
+        decisions["rms"] = decision(rms_ratio, measurement(rms_ratio if rms_ratio is not None else np.nan, float(rms_error), decision_cfg), RMS_RATIO_LIMIT)
 
     return BandResult(
         band=item["band"],
@@ -386,20 +430,27 @@ def _score_band(
         separation_median_arcsec=separation_median,
         separation_p95_arcsec=separation_p95,
         separation_max_arcsec=separation_max,
-        position_status=_status(separation_p95, POSITION_LIMIT_ARCSEC),
+        position_status=decisions["position"]["status"],
         rigid_fit=rigid_fit,
         total_flux_ratio_median=total_ratio_median,
         total_flux_abs_deviation_p95=total_p95,
         total_flux_fraction_beyond_limit=total_fraction,
         peak_flux_ratio_median=peak_ratio_median,
-        flux_status=_status(
-            None if total_ratio_median is None else abs(total_ratio_median - 1.0),
-            FLUX_LIMIT_FRACTION,
-        ),
+        flux_status=decisions["flux"]["status"],
         reference_rms_jy_per_beam=reference_rms,
         test_rms_jy_per_beam=test_rms,
         rms_ratio=rms_ratio,
-        rms_status=_status(rms_ratio, RMS_RATIO_LIMIT),
+        rms_status=decisions["rms"]["status"],
+        uncertainties=uncertainties, decisions=decisions,
+        uncertainty_provenance={**asdict(uc), "decision_confidence_level": ONE_SIGMA,
+            "measurement_assumption": "independent catalogues; no input covariance supplied",
+            "quality_row_indices": column(quality, "analysis_row_index").astype(int).tolist(),
+            "valid_position_errors": int(np.isfinite(column(table, "separation_err_arcsec")).sum()),
+            "valid_total_ratio_errors": int(np.isfinite(column(table, "total_flux_ratio_err")).sum()),
+            "valid_peak_ratio_errors": int(np.isfinite(column(table, "peak_flux_ratio_err")).sum()),
+            "quality_selection": "S_Code=S where supplied; finite positions and peak/error >=10; missing peak errors fail quality selection",
+            "sampling_assumption": "independent matched sources; conditional on match gate and quality cuts; measurement scatter already represented"},
+        matched_sources_output=str(matched_output) if matched_output else None,
     )
 
 
@@ -523,6 +574,10 @@ def _fmt_pct(value: float | None, digits: int = 1) -> str:
     return "—" if not _finite(value) else f"{100.0 * float(value):.{digits}f}%"
 
 
+def _metric(result, name, scale=1.):
+    return format_uncertainty(getattr(result, name), result.uncertainties.get(name), scale=scale)
+
+
 def _caption(doc: Document, text: str) -> None:
     paragraph = doc.add_paragraph(text)
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -551,7 +606,19 @@ def _plot_acceptance(results: list[BandResult], output: Path) -> None:
         (axes[1, 0], [result.rms_ratio for result in results], RMS_RATIO_LIMIT, "Measured / CMC1 RMS", "ratio"),
         (axes[1, 1], [None if result.rigid_fit is None else 1000 * result.rigid_fit.rotation_deg for result in results], None, "Rigid field rotation", "millidegree"),
     ]
-    for axis, values, limit, title, ylabel in panels:
+    panel_uncertainties = []
+    for result in results:
+        flux = result.uncertainties.get("total_flux_ratio_median", {})
+        lo, hi = flux.get("ci_low"), flux.get("ci_high")
+        flux_interval = {}
+        if lo is not None and hi is not None:
+            flux_interval = dict(ci_low=100*(0 if lo <= 1 <= hi else min(abs(lo-1), abs(hi-1))),
+                                 ci_high=100*max(abs(lo-1), abs(hi-1)))
+        rotation = result.rigid_fit.uncertainties.get("rotation_deg", {}) if result.rigid_fit else {}
+        rotation_interval = {k: v*1000 for k, v in rotation.items() if k in ("ci_low", "ci_high") and v is not None}
+        panel_uncertainties.append([result.uncertainties.get("separation_p95_arcsec", {}),
+            flux_interval, result.uncertainties.get("rms_ratio", {}), rotation_interval])
+    for panel_index, (axis, values, limit, title, ylabel) in enumerate(panels):
         numeric = [0.0 if not _finite(value) else float(value) for value in values]
         bars = axis.bar(labels, numeric, color=colors[: len(labels)], width=0.62)
         for bar, value in zip(bars, values):
@@ -560,6 +627,14 @@ def _plot_acceptance(results: list[BandResult], output: Path) -> None:
                 axis.text(bar.get_x() + bar.get_width() / 2, 0, "N/A", ha="center", va="bottom", fontsize=8)
             else:
                 axis.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{float(value):.3g}", ha="center", va="bottom", fontsize=8)
+        for index, value in enumerate(values):
+            info = panel_uncertainties[index][panel_index]
+            lo, hi = info.get("ci_low"), info.get("ci_high")
+            if _finite(value) and lo is not None and hi is not None:
+                # Draw absolute bounds; percentile intervals need not contain estimate.
+                axis.vlines(index, lo, hi, color="black", lw=1.2)
+                axis.hlines([lo, hi], index-.06, index+.06, color="black", lw=1.2)
+        axis.margins(y=.18)
         if limit is not None:
             axis.axhline(limit, color="#9C2F2F", linestyle="--", linewidth=1.2, label=f"limit {limit:g}")
             axis.legend(frameon=False, fontsize=8)
@@ -583,7 +658,7 @@ def _overall_status(results: list[BandResult], image_status: str) -> str:
     ]
     if image_status == "Concern" or "Concern" in scored:
         return "Concern"
-    return "Pass" if scored and all(status == "Pass" for status in scored) else "Partial"
+    return "Pass" if scored and len(scored) == 3*len(results) and all(status == "Pass" for status in scored) else "Partial"
 
 
 def _add_status_paragraph(doc: Document, label: str, status: str, text: str) -> None:
@@ -656,9 +731,9 @@ def _build_docx(
     )
     for result in results:
         state = result.correction_state
-        position = "not assessed" if result.separation_p95_arcsec is None else f"p95 {result.separation_p95_arcsec:.2f} arcsec ({result.position_status.lower()})"
-        flux = "not assessed" if result.total_flux_ratio_median is None else f"median integrated-flux ratio {result.total_flux_ratio_median:.3f} ({result.flux_status.lower()})"
-        noise = f"RMS ratio {result.rms_ratio:.2f} ({result.rms_status.lower()})" if result.rms_ratio is not None else "RMS not assessed"
+        position = "not assessed" if result.separation_p95_arcsec is None else f"p95 {_metric(result, 'separation_p95_arcsec')} arcsec ({result.position_status.lower()})"
+        flux = "not assessed" if result.total_flux_ratio_median is None else f"median integrated-flux ratio {_metric(result, 'total_flux_ratio_median')} ({result.flux_status.lower()})"
+        noise = f"RMS ratio {_metric(result, 'rms_ratio')} ({result.rms_status.lower()})" if result.rms_ratio is not None else "RMS not assessed"
         doc.add_paragraph(
             f"{result.band} [{state}]: {position}; {flux}; {noise}.",
             style="List Bullet",
@@ -673,12 +748,19 @@ def _build_docx(
     )
 
     _page_heading(doc, "Acceptance results")
+    doc.add_paragraph(
+        f"Intervals are {100*results[0].uncertainty_provenance.get('confidence_level', ONE_SIGMA):.2f}% confidence "
+        "(default 68.27%, approximately 1 sigma). Brackets give absolute interval endpoints. "
+        "Catalogue intervals retain the envelope of source-sampling and fixed-sample measurement-propagation intervals where available. "
+        "Pass requires the full 68.27% decision interval to satisfy the existing limit. "
+        "An interval touching or crossing the limit is Concern; unavailable decision uncertainty is Not assessed."
+    )
     rows = []
     for result in results:
-        position = f"{_fmt(result.separation_p95_arcsec, 2)} arcsec\n{result.position_status}"
+        position = f"{_metric(result, 'separation_p95_arcsec')} arcsec\n{result.position_status}"
         flux_error = None if result.total_flux_ratio_median is None else abs(result.total_flux_ratio_median - 1.0)
-        flux = f"{_fmt_pct(flux_error)}\n{result.flux_status}"
-        rms = f"{_fmt(result.rms_ratio, 2)}\n{result.rms_status}"
+        flux = f"{_metric(result, 'total_flux_ratio_median')}\n{result.flux_status}"
+        rms = f"{_metric(result, 'rms_ratio')}\n{result.rms_status}"
         rows.append([result.band, result.correction_state, position, flux, rms])
     _add_table(
         doc,
@@ -686,7 +768,7 @@ def _build_docx(
             "Product",
             "Correction",
             "Position p95\npass below 1 arcsec",
-            "Median flux error\npass below 5%",
+            "Median flux ratio\nwithin 0.95–1.05",
             "RMS ratio\npass below 1.2",
         ],
         rows,
@@ -694,7 +776,7 @@ def _build_docx(
     doc.add_picture(str(figure_path), width=Inches(6.7))
     _caption(
         doc,
-        "Figure 1. Acceptance metrics for the MFS, low-band and high-band products. Grey bars denote insufficient catalogue evidence.",
+        "Figure 1. Acceptance metrics for the MFS, low-band and high-band products. Error bars show the stated confidence intervals; missing bars mean uncertainty is unavailable. Grey bars denote insufficient catalogue evidence.",
     )
 
     doc.add_heading("Astrometry and rigid rotation", level=2)
@@ -705,11 +787,11 @@ def _build_docx(
             [
                 result.band,
                 f"{result.matched_count} / {result.quality_count}",
-                _fmt(result.separation_median_arcsec, 2),
-                _fmt(result.separation_p95_arcsec, 2),
-                "—" if fit is None else f"{fit.rotation_deg:.5f} ± {fit.rotation_uncertainty_deg:.5f}",
-                "—" if fit is None else f"{fit.translation_east_arcsec:.2f}, {fit.translation_north_arcsec:.2f}",
-                "—" if fit is None else f"{fit.postfit_p95_arcsec:.2f}",
+                _metric(result, "separation_median_arcsec"),
+                _metric(result, "separation_p95_arcsec"),
+                "—" if fit is None else _metric(fit, "rotation_deg"),
+                "—" if fit is None else _metric(fit, "translation_east_arcsec") + "\n" + _metric(fit, "translation_north_arcsec"),
+                "—" if fit is None else _metric(fit, "postfit_p95_arcsec"),
                 result.position_status,
             ]
         )
@@ -725,12 +807,12 @@ def _build_docx(
         flux_rows.append(
             [
                 result.band,
-                f"{result.reference_catalogue_count or '—'} / {result.test_catalogue_count or '—'}",
-                _fmt(result.total_flux_ratio_median, 3),
-                _fmt(result.peak_flux_ratio_median, 3),
-                _fmt_pct(result.total_flux_abs_deviation_p95),
-                _fmt_pct(result.total_flux_fraction_beyond_limit),
-                _fmt(result.rms_ratio, 2),
+                f"{result.reference_catalogue_count if result.reference_catalogue_count is not None else '—'} / {result.test_catalogue_count if result.test_catalogue_count is not None else '—'}",
+                _metric(result, "total_flux_ratio_median"),
+                _metric(result, "peak_flux_ratio_median"),
+                _metric(result, "total_flux_abs_deviation_p95", 100) + "%",
+                _metric(result, "total_flux_fraction_beyond_limit", 100) + "%",
+                _metric(result, "rms_ratio"),
                 f"flux {result.flux_status}; RMS {result.rms_status}",
             ]
         )
@@ -739,6 +821,15 @@ def _build_docx(
         ["Product", "PyBDSF ref / test", "median total ratio", "median peak ratio", "p95 |total−1|", "fraction >5%", "RMS ratio", "decision"],
         flux_rows,
     )
+
+    for result in results:
+        doc.add_paragraph(f"{result.band} annular RMS (µJy/beam): reference "
+            f"{_metric(result, 'reference_rms_jy_per_beam', 1e6)}; test "
+            f"{_metric(result, 'test_rms_jy_per_beam', 1e6)}. "
+            "Gaussian MAD-scale uncertainty uses independent beam area, excluding noise-model systematics.")
+    doc.add_paragraph("Catalogue envelopes are conservative sensitivity bounds, not exact combined-coverage intervals. Missing formal errors leave sampling-only intervals, identified in the metrics JSON. Rigid-fit intervals retain the envelope of positional-covariance GLS and paired-source bootstrap intervals. "
+        "Post-fit intervals refit resampled inliers; match selection and clipping uncertainty are not included. "
+        "Wilson intervals describe the observed fraction above 5%; they do not classify latent true source fluxes.")
 
     diagnostic = next(iter(sorted(qa_dir.glob("*_01_combined_plane_diagnostic.png"))), None)
     subbands = next(iter(sorted(qa_dir.glob("*_02_subband_common_scale.png"))), None)
@@ -827,9 +918,13 @@ def build_verification_report(cfg: Config) -> Path:
 
     report_cfg = dict(cfg.extra.get("verification_report") or {})
     catalogue_counts = _catalogue_counts(cfg)
+    uc = UncertaintyConfig.from_mapping(cfg.extra.get("uncertainty"))
+    observation_label = cfg.tests[0].name.removeprefix("CMC2_")
+    output_dir = Path(cfg.paths.reports_dir).expanduser() / "imaging_verification"
     results = [
-        _score_band(item, catalogue_counts.get(item["band"], (None, None)))
-        for item in inputs
+        _score_band(item, catalogue_counts.get(item["band"], (None, None)), uc,
+            output_dir / f"{observation_label}_{index}_matched_uncertainties.fits")
+        for index, item in enumerate(inputs)
     ]
 
     observation_label = cfg.tests[0].name.removeprefix("CMC2_")
@@ -860,7 +955,8 @@ def build_verification_report(cfg: Config) -> Path:
         "bands": [asdict(result) for result in results],
         "calibration_reports": [str(path) for path in calreports],
     }
-    metrics_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    payload["uncertainty"] = asdict(uc)
+    write_json(metrics_path, payload)
     print(f"[REPORT] Wrote {output}")
     print(f"[REPORT] Wrote {metrics_path}")
     return output
