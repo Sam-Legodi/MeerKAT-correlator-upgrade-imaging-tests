@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .uncertainty import cluster_comparison, UncertaintyConfig, write_json
 from .output_paths import draft_docx_path, save_report
 
 try:
@@ -245,6 +246,11 @@ def spectrum_metrics(
         "RMS": rms,
         "OSC_FRAC": float(oscillation),
         "N_VALID": count,
+        "MEAN_ERR": np.nan,
+        "RMS_ERR": np.nan,
+        "OSC_FRAC_ERR": np.nan,
+        "UNCERTAINTY_METHOD": "unavailable: correlated spectral samples; no measurement covariance",
+
     }
 
 
@@ -684,7 +690,7 @@ def analyze_single(
             "FLAG_FRAC",
             "FLAG_STATUS",
             "RFI_FREE_CHANNELS",
-            "VALID_CHANNELS",
+            "VALID_CHANNELS", "MEAN_ERR", "RMS_ERR", "OSC_FRAC_ERR",
         ]
         scan_rows = []
         with perrow_path.open("w", newline="", encoding="utf-8") as stream:
@@ -774,6 +780,7 @@ def analyze_single(
                                         ),
                                         "RFI_FREE_CHANNELS": int(rfi_mask[:, pol_index].sum()),
                                         "VALID_CHANNELS": metrics["N_VALID"],
+                                        "MEAN_ERR": np.nan, "RMS_ERR": np.nan, "OSC_FRAC_ERR": np.nan,
                                     }
                                 )
                 finally:
@@ -826,6 +833,7 @@ def analyze_single(
                                 ),
                                 "RFI_FREE_CHANNELS": int(rfi_mask[:, pol_index].sum()),
                                 "VALID_CHANNELS": metrics["N_VALID"],
+                                        "MEAN_ERR": np.nan, "RMS_ERR": np.nan, "OSC_FRAC_ERR": np.nan,
                             }
                         )
 
@@ -1074,6 +1082,10 @@ def analyze_single(
     if HAVE_DOCX:
         try:
             document = Document()
+            document.add_paragraph("Flagging fractions are exact counts for the selected data, not binomial estimates of a sampled population. "
+                "Measurement uncertainties of spectral means, detrended RMS and oscillations are unavailable without channel covariance. "
+                "Reference/test dataset comparisons provide whole-scan bootstrap sampling intervals when at least two scans exist on each side; "
+                "the method assumes independent scans and preserves dependence within each scan.")
             document.add_heading("Visibility-domain verification", level=1)
             document.add_paragraph(f"MeasurementSet: {ms_path}")
             if field_name:
@@ -1135,9 +1147,14 @@ def analyze_single(
 
 
 def compare_results(
-    result_a: Dict[str, Path], result_b: Dict[str, Path], outdir: Path
+    result_a: Dict[str, Path], result_b: Dict[str, Path], outdir: Path,
+    uncertainty_config: UncertaintyConfig | None = None,
 ) -> None:
-    """Compare scan-averaged reference and test visibility statistics."""
+    """Compare scan-averaged statistics with whole-scan sampling intervals.
+
+    Operational FLAG gates remain exact census checks. No independent-channel
+    error is invented for the correlated, detrended spectral RMS/oscillation.
+    """
     try:
         a = pd.read_csv(result_a["outdir"] / "scan_averaged_amp_stats.csv")
         b = pd.read_csv(result_b["outdir"] / "scan_averaged_amp_stats.csv")
@@ -1161,7 +1178,20 @@ def compare_results(
         merged_summary[f"{metric}_DELTA_B_MINUS_A"] = (
             merged_summary[f"{metric}_B"] - merged_summary[f"{metric}_A"]
         )
+    comparison_uncertainties = []
+    for index, row in merged_summary.iterrows():
+        selection_a = a[(a['CLASS'] == row['CLASS']) & (a['POL'] == row['POL'])]
+        selection_b = b[(b['CLASS'] == row['CLASS']) & (b['POL'] == row['POL'])]
+        for metric in ('MEAN', 'RMS', 'OSC_FRAC', 'FLAG_FRAC'):
+            groups = [[group[metric].to_numpy(dtype=float) for _, group in frame.groupby('SCAN')]
+                      for frame in (selection_a, selection_b)]
+            info = cluster_comparison(*groups, uncertainty_config)
+            comparison_uncertainties.append({'CLASS': row['CLASS'], 'POL': row['POL'], 'metric': metric, 'dataset_a': info['reference'], 'dataset_b': info['test'], 'difference_b_minus_a': info['difference'], 'measurement_uncertainty': info['measurement_uncertainty']})
+            for label, part in [('A', 'reference'), ('B', 'test'), ('DELTA_B_MINUS_A', 'difference')]:
+                for field in ('ci_low', 'ci_high', 'standard_error'):
+                    merged_summary.loc[index, f'{metric}_{label}_{field.upper()}'] = info[part][field]
     merged_summary.to_csv(outdir / "compare_dataset_summary.csv", index=False)
+    write_json(outdir / 'compare_uncertainties.json', {'dataset_a_input': str(result_a['outdir']), 'dataset_b_input': str(result_b['outdir']), 'metrics': comparison_uncertainties})
 
     for metric in ("MEAN", "RMS", "OSC_FRAC", "FLAG_FRAC"):
         group_keys = ["SCAN", "CLASS", "POL"]

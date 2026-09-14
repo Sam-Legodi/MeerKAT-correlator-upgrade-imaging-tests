@@ -46,6 +46,8 @@ def run(cfg: Config):
                 cmd += ["--per-scan-glob", analysis["per_scan_glob"]]
             if analysis.get("otherdatatag"):
                 cmd += ["--otherdatatag", analysis["otherdatatag"]]
+            for key, value in (cfg.extra.get("uncertainty") or {}).items():
+                cmd += ["--" + key.replace("_", "-"), str(value)]
             _run(cmd, inputs=[label])
         except Exception as exc:
             record_failure(label, exc)

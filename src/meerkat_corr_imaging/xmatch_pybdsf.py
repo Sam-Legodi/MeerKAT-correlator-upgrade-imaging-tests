@@ -365,7 +365,9 @@ def build_output_table(
     sep_arcsec = np.array([m[2].to_value(u.arcsec) for m in matches], dtype=float)
     output["sep_arcsec"] = sep_arcsec
 
-    return output
+    # Normalize standard PyBDSF measurements while retaining all original fields.
+    from .uncertainty import enrich_matches
+    return enrich_matches(output)
 
 
 def cross_match_catalogues(

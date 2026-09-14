@@ -42,6 +42,8 @@ print(res["outdir"], res["report_docx"])
 """
 
 import os, sys, time, argparse, csv, glob, builtins
+from pathlib import Path
+from dataclasses import asdict
 from astropy.table import Table, Column
 from astropy.io import fits
 from astropy.wcs import WCS as w
@@ -62,6 +64,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from matplotlib.patches import Ellipse  # NEW: for enclosing ellipses
 
+from .uncertainty import (UncertaintyConfig, column, enrich_matches, describe,
+    format_uncertainty, paired_summary, write_json)
 from .output_paths import draft_docx_path, save_report
 
 
@@ -379,7 +383,7 @@ def _add_enclosing_ellipse(ax, x, y, color, label):
                   angle=0.0, fill=False, lw=1.6, alpha=0.5,
                   edgecolor=color, label=f"{label} ellipse")
     ax.add_patch(ell)
-    ax.plot(xm, ym, 'x', color=color, markersize=8, mew=2, label=f"{label}\n center [{xm:.2f}±{xme:.2f}, {ym:.2f}±{yme:.2f}]")
+    ax.plot(xm, ym, 'x', color=color, markersize=8, mew=2, label=f"{label}\n center [{xm:.2f}, {ym:.2f}]; scatter SD [{xme:.2f}, {yme:.2f}]")
 
 
 def pos_varCMC1xCMC2(
@@ -388,6 +392,7 @@ def pos_varCMC1xCMC2(
     ref_fits_path, other_fits_path,
     base_ref=None, base_other=None,
     xmatch_table_path=None,
+    uncertainty_config=None,
 ):
     """
     Plot positional variations between two cross-matched catalogues measured on two images.
@@ -399,6 +404,7 @@ def pos_varCMC1xCMC2(
 
     Returns a dict with figure paths, output dir, and summary arrays.
     """
+    uc = uncertainty_config or UncertaintyConfig()
     # base names for titles/labels
     if base_ref is None:
         try:
@@ -441,6 +447,27 @@ def pos_varCMC1xCMC2(
     # Sky offsets and theta, using RA_Dec_offsets.
     Dra_arcsec, Ddec_arcsec = RA_Dec_offsets(ra1, dec1, ra2, dec2)
     theta_deg = np.degrees(np.arctan2(Ddec_arcsec, Dra_arcsec))
+    if xmatch_table_path:
+        measured = enrich_matches(Table.read(xmatch_table_path), uc)
+    else:
+        measured = enrich_matches(Table({'RA_1': ra1, 'DEC_1': dec1, 'RA_2': ra2, 'DEC_2': dec2}), uc)
+    east_error = column(measured, 'east_offset_err_arcsec')
+    north_error = column(measured, 'north_offset_err_arcsec')
+    radius_error = column(measured, 'separation_err_arcsec')
+    phi_errors = []
+    for suffix, x, y, phi in [('1', x1, y1, phi1_deg), ('2', x2, y2, phi2_deg)]:
+        dx, dy = x-x0, y-y0
+        ex = column(measured, f'E_Xposn_{suffix}', u.pix, error=True)
+        ey = column(measured, f'E_Yposn_{suffix}', u.pix, error=True)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            error = np.rad2deg(np.sqrt((dy*ex)**2+(dx*ey)**2)/(dx*dx+dy*dy))
+        error = np.where(np.isfinite(error), error, np.nan)
+        phi_errors.append(error)
+        measured[f'field_angle_{suffix}_deg'] = phi
+        measured[f'field_angle_err_{suffix}_deg'] = error
+        measured[f'field_angle_{suffix}_deg'].unit = u.deg
+        measured[f'field_angle_err_{suffix}_deg'].unit = u.deg
+
 
     # normalized variants
     Dra_bm   = Dra_arcsec  / cbmaj_arcsec
@@ -451,6 +478,12 @@ def pos_varCMC1xCMC2(
     rho_arcsec = np.hypot(Dra_arcsec, Ddec_arcsec)
     rho_bm     = rho_arcsec / cbmaj_arcsec
     rho_bm_main = np.asarray(rho_bm)
+    for name, value, error in [('east_offset_bmaj', Dra_bm, east_error/cbmaj_arcsec),
+                               ('north_offset_bmaj', Ddec_bm, north_error/cbmaj_arcsec),
+                               ('radial_offset_bmaj', rho_bm, radius_error/cbmaj_arcsec),
+                               ('offset_angle_deg', theta_deg, column(measured, 'offset_angle_err_deg'))]:
+        measured[name] = value
+        measured[name+'_err'] = error
 
     # === Quadrupole checks (paste after Dra_bm / Ddec_bm are computed) ===
     quad_dra_phi1 = _harmonic_quad_summary(phi1_deg, Dra_bm, label="ΔRA/Bmaj vs φ1")
@@ -489,7 +522,7 @@ def pos_varCMC1xCMC2(
     circular_stats_oneliner = "\n".join([
         f"θ circular snapshot (n={circ_theta['n']}):",
         f"  r = {circ_theta['r']:.3f} (0 ⇒ uniform, 1 ⇒ aligned)",
-        f"  mean θ = {circ_theta['mean_deg']:.1f}° east of north",
+        f"  mean θ = {circ_theta['mean_deg']:.1f}° north of east",
         f"  Rayleigh p = {circ_theta['p']:.3g} ({rayleigh_label})",
         "  The ρ/Bmaj spread provides complementary evidence for directional systematics.",
     ])
@@ -509,7 +542,7 @@ def pos_varCMC1xCMC2(
     else:
         outdir = _ensure_dir(os.path.dirname(other_fits_path)+"/crossmatched-positions")
     
-    base_other_full = os.path.basename(xmatch_table_path).replace(".fits", "")
+    base_other_full = os.path.basename(xmatch_table_path or other_fits_path).replace(".fits", "")
     report_docx = draft_docx_path(
         os.path.join(outdir, f"{base_ref}_x_{base_other_full}_astrometry.docx")
     )
@@ -534,6 +567,8 @@ def pos_varCMC1xCMC2(
     ax.grid(True, linestyle=':', linewidth=0.7, alpha=0.6)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])  # leave room right for legend
+    for phi, error in zip((phi1_deg, phi2_deg), phi_errors):
+        plt.errorbar(Dra_bm, phi, xerr=east_error/cbmaj_arcsec, yerr=error, fmt='none', alpha=.3, color='gray')
     _save_fig(fig1)
 
     # 2) ΔDec/Bmaj vs φ  [two datasets → ellipses]
@@ -548,6 +583,8 @@ def pos_varCMC1xCMC2(
     ax.grid(True, linestyle=':', linewidth=0.7, alpha=0.6)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])
+    for phi, error in zip((phi1_deg, phi2_deg), phi_errors):
+        plt.errorbar(Ddec_bm, phi, xerr=north_error/cbmaj_arcsec, yerr=error, fmt='none', alpha=.3, color='gray')
     _save_fig(fig2)
 
     # 3) ΔRA vs ΔDec (in beam-major units)  [single dataset → no ellipse]
@@ -560,6 +597,7 @@ def pos_varCMC1xCMC2(
     ax.grid(True, linestyle=':', linewidth=0.7, alpha=0.6)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])
+    plt.errorbar(Dra_bm, Ddec_bm, xerr=east_error/cbmaj_arcsec, yerr=north_error/cbmaj_arcsec, fmt='none', alpha=.3, color='gray')
     _save_fig(fig3)
 
     # 4) ΔRA vs ΔDec (in arcsec)  [single dataset → no ellipse]
@@ -573,6 +611,7 @@ def pos_varCMC1xCMC2(
     _enforce_square_axes(ax)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])
+    plt.errorbar(Dra_arcsec, Ddec_arcsec, xerr=east_error, yerr=north_error, fmt='none', alpha=.3, color='gray')
     _save_fig(fig4)
 
     # 5) θ/Bmaj vs φ  [two datasets → ellipses]
@@ -587,6 +626,8 @@ def pos_varCMC1xCMC2(
     ax.grid(True, linestyle=':', linewidth=0.7, alpha=0.6)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])
+    for phi, error in zip((phi1_deg, phi2_deg), phi_errors):
+        plt.errorbar(theta_bm, phi, yerr=error, xerr=column(measured, 'offset_angle_err_deg')/cbmaj_arcsec, fmt='none', alpha=.3, color='gray')
     _save_fig(fig5)
 
     # 6) ρ/Bmaj vs φ  [two datasets → ellipses; physically meaningful normalization]
@@ -601,10 +642,47 @@ def pos_varCMC1xCMC2(
     ax.grid(True, linestyle=':', linewidth=0.7, alpha=0.6)
     _legend_outside(ax)
     plt.tight_layout(rect=[0,0,0.78,1])
+    for phi in (phi1_deg, phi2_deg):
+        plt.hlines(phi, column(measured, 'separation_ci_low_arcsec')/cbmaj_arcsec,
+                   column(measured, 'separation_ci_high_arcsec')/cbmaj_arcsec, alpha=.3, color='gray')
     _save_fig(fig6)
 
     # --- Build summary stats (from offsets) ---
-    stats_rows = _stats_table_from_offsets(Dra_arcsec, Ddec_arcsec, cbmaj_arcsec, cbmin_arcsec, rho_bm_main=rho_bm_main)
+    metrics = {}
+    stats_rows = []
+    for label, values in [('ΔRA (arcsec)', Dra_arcsec), ('ΔDec (arcsec)', Ddec_arcsec),
+            ('ΔRA / Bmaj', Dra_arcsec/cbmaj_arcsec), ('ΔDec / Bmaj', Ddec_arcsec/cbmaj_arcsec),
+            ('ΔRA / Bmin', Dra_arcsec/cbmin_arcsec), ('ΔDec / Bmin', Ddec_arcsec/cbmin_arcsec),
+            ('rho/Bmaj (main)', rho_bm_main)]:
+        info = describe(values, uc)
+        metrics[label] = info
+        stats_rows.append([label]+[format_uncertainty(info[key]['value'], info[key]) for key in ('mean','std','median','p16','p84')])
+    harmonic = {}
+    for label, phi, offsets in [('east_phi1', phi1_deg, Dra_bm), ('east_phi2', phi2_deg, Dra_bm),
+                               ('north_phi1', phi1_deg, Ddec_bm), ('north_phi2', phi2_deg, Ddec_bm)]:
+        harmonic[label] = paired_summary([phi, offsets], _harmonic_quad_summary,
+            ['A2', 'psi2', 'dR2', 'R2_full'], uc, periods={'psi2': 180}, minimum=6)
+    circular = paired_summary([theta_deg], _circ_stats_rayleigh, ['r', 'mean_deg'], uc,
+                              periods={'mean_deg': 360}, minimum=5)
+    # Mean direction is not identifiable when the resultant is indistinguishable from zero.
+    if circ_theta['r'] < 1e-8:
+        circular['mean_deg'].update(ci_low=None, ci_high=None, reason='undefined mean direction')
+    numeric = {'uncertainty_config': asdict(uc), 'offset_statistics': metrics,
+               'harmonic': harmonic, 'circular': circular,
+               'rayleigh_p': circ_theta['p'], 'rayleigh_note': 'diagnostic p-value, not a parameter uncertainty'}
+    from .xmatch_pybdsf import sanitize_fits_meta
+    source_output = Path(outdir) / (base_other_full + '_uncertainties.fits')
+    sanitize_fits_meta(measured).write(source_output, overwrite=True)
+    numeric['matched_sources_output'] = str(source_output)
+    metrics_path = Path(report_docx).with_suffix('.json')
+    write_json(metrics_path, numeric)
+
+    def diagnostic_line(label, info):
+        return label + ': ' + ', '.join(key+'='+format_uncertainty(value['value'], value) for key, value in info.items() if key != 'R2_full')
+    quad_summary_dra = diagnostic_line('φ1', harmonic['east_phi1']) + '; ' + diagnostic_line('φ2', harmonic['east_phi2'])
+    quad_summary_ddec = diagnostic_line('φ1', harmonic['north_phi1']) + '; ' + diagnostic_line('φ2', harmonic['north_phi2'])
+    rho_stats_line = 'ρ/Bmaj median=' + format_uncertainty(metrics['rho/Bmaj (main)']['median']['value'], metrics['rho/Bmaj (main)']['median'])
+    circular_stats_oneliner = diagnostic_line('Circular θ', circular) + f"; Rayleigh p={circ_theta['p']:.3g}."
 
     # --- Write DOCX report ---
     doc = Document()
@@ -614,6 +692,10 @@ def pos_varCMC1xCMC2(
     if xmatch_table_path:
         doc.add_paragraph(f"Cross-match table: {os.path.basename(xmatch_table_path)}")
 
+    doc.add_paragraph(f"Intervals are {100*uc.confidence_level:.2f}% confidence (default 68.27%, approximately 1 sigma). "
+        "Brackets give absolute endpoints. Source bars propagate catalogue measurement errors; "
+        "near-zero radial intervals use Gaussian coordinate Monte Carlo. Direction errors are omitted at low S/N. "
+        "Field-angle errors propagate independent pixel-coordinate errors where supplied. Beam metadata are treated as fixed. Ellipses and source SDs describe scatter, not mean uncertainty.")
     # Add plots with captions + physical interpretations
     for fp, cap, interp, caution in [
         (
@@ -684,13 +766,25 @@ def pos_varCMC1xCMC2(
     _docx_add_heading(doc, "Summary statistics of positional offsets", level=1)
     _docx_add_table(doc, stats_rows)
     _docx_add_caption(doc, "Table 1: Summary metrics for ΔRA and ΔDec computed from the cross-matched catalogue. "
-                      "The 16th and 84th percentiles provide robust, model-light approximations to one standard "
-                      "deviation below and above the median for a roughly symmetric distribution, without assuming "
-                      "Gaussian noise.")
+                      "Each statistic has a paired-source bootstrap sampling interval. P16/P84 describe the source distribution; their intervals describe sampling uncertainty.")
 
+    _docx_add_heading(doc, "Harmonic and circular sampling uncertainties", level=1)
+    diagnostic_table = doc.add_table(rows=1, cols=3)
+    for cell, title in zip(diagnostic_table.rows[0].cells, ('Diagnostic', 'Parameter', 'Value and interval')):
+        cell.text = title
+    for label, info in list(harmonic.items()) + [('circular', circular)]:
+        for key, value in info.items():
+            cells = diagnostic_table.add_row().cells
+            for cell, text in zip(cells, (label, key, format_uncertainty(value['value'], value))):
+                cell.text = text
+    _set_table_borders(diagnostic_table)
+    doc.add_paragraph("Harmonic and circular intervals resample source rows. Phase intervals are unwrapped about the estimate "
+        "(180° period for quadrupole phase, 360° for mean direction); weak amplitudes give poorly constrained phases. "
+        "Rayleigh p is a diagnostic probability and is not assigned an error bar.")
     save_report(doc, report_docx)
 
     return {
+        'metrics': numeric, 'metrics_path': str(metrics_path),
         'cbmaj_arcsec': cbmaj_arcsec,
         'cbmin_arcsec': cbmin_arcsec,
         'x0': x0, 'y0': y0, 'x2_0': x2_0, 'y2_0': y2_0,
@@ -759,10 +853,10 @@ def get_cmc2Xcmc1(tablename):
     """
     t = Table.read(tablename)
 
-    ra_cmc1  = t['RA_1'];  era_cmc1  = t['E_RA_1']
-    ra_cmc2  = t['RA_2'];  era_cmc2  = t['E_RA_2']
-    dec_cmc1 = t['DEC_1']; edec_cmc1 = t['E_DEC_1']
-    dec_cmc2 = t['DEC_2']; edec_cmc2 = t['E_DEC_2']
+    ra_cmc1  = t['RA_1'];  era_cmc1  = column(t, 'E_RA_1', u.deg, error=True)
+    ra_cmc2  = t['RA_2'];  era_cmc2  = column(t, 'E_RA_2', u.deg, error=True)
+    dec_cmc1 = t['DEC_1']; edec_cmc1 = column(t, 'E_DEC_1', u.deg, error=True)
+    dec_cmc2 = t['DEC_2']; edec_cmc2 = column(t, 'E_DEC_2', u.deg, error=True)
     xpx_cmc1 = t['Xposn_1']; ypx_cmc1 = t['Yposn_1']
     xpx_cmc2 = t['Xposn_2']; ypx_cmc2 = t['Yposn_2']
 
@@ -843,6 +937,7 @@ def analyze_ref_vs_other_with_optional_scans(
     baseref0=None,
     baseother0=None,
     per_scan_glob=None,
+    uncertainty_config=None,
 ):
     """
     Streamlined wrapper:
@@ -875,6 +970,7 @@ def analyze_ref_vs_other_with_optional_scans(
         xmatch_table_path=xmatch_table_path,
         base_ref=baseref0,
         base_other=baseother0,
+        uncertainty_config=uncertainty_config,
     )
     outdir      = main_res.get('outdir', os.path.join(os.path.dirname(other_fits_path), 'crossmatched-positions'))
     base_ref    = main_res.get('base_ref', os.path.basename(ref_fits_path).replace('.fits',''))
@@ -1122,6 +1218,9 @@ def _build_argparser():
     p.add_argument('--other-fits', required=True, help='Other/test image FITS path')
     p.add_argument('--per-scan-glob', default=None, help='Glob pattern for per-scan cross-match FITS tables (e.g., "/data/xmatches/refXscan*.fits")')
     p.add_argument('--otherdatatag', default=None, help='string tag to identify the "other" dataset in filenames (for labeling); defaults to basename of other-fits without .fits')
+    p.add_argument('--bootstrap-samples', type=int, default=5000)
+    p.add_argument('--confidence-level', type=float, default=0.6826894921370859)
+    p.add_argument('--random-seed', type=int, default=20260911)
     return p
 
 
@@ -1135,6 +1234,7 @@ def _cli():
         baseref0=None,
         baseother0=args.otherdatatag,
         per_scan_glob=args.per_scan_glob,
+        uncertainty_config=UncertaintyConfig(args.bootstrap_samples, args.confidence_level, args.random_seed),
     )
     outdir = res.get('outdir')
     report = res.get('report_docx')
