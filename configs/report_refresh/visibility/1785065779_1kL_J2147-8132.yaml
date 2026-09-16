@@ -1,0 +1,47 @@
+# DRAFT: replace reference_ms/test_ms with actual single-field SDP-corrected MS paths.
+# Run vis ONLY. casa.field/datacolumn do not control the vis wrapper.
+# Both MSs must contain only the named field; analyzer prefers CORRECTED_DATA, then DATA.
+# Reference chosen to match the existing image comparison; verify availability on server.
+project_name: SDP corrected visibility QA 1785065779_1kL J2147-8132
+path_vars:
+  remote_root: /home/slegodi/corr_upgrade_tests/2026
+  reference_ms: /REPLACE_WITH_SDP_CORRECTED_MS/CMC1_1785941476_4kL_J2147-8132.ms
+  test_ms: /REPLACE_WITH_SDP_CORRECTED_MS/CMC2_1785065779_1kL_J2147-8132.ms
+  output_root: ${remote_root}/report_refresh/1785065779_1kL/J2147-8132
+paths:
+  raw_dir: ${output_root}/raw
+  interim_dir: ${output_root}/interim
+  processed_dir: ${output_root}/processed
+  reports_dir: ${output_root}/reports
+  sky_xmatches_dir: ${output_root}/processed/Sky-CrossMatches
+reference:
+  name: CMC1_1785941476_4kL_J2147-8132
+  ms_paths:
+  - ${reference_ms}
+  images: []
+tests:
+- name: CMC2_1785065779_1kL_J2147-8132
+  ms_paths:
+  - ${test_ms}
+  images: []
+casa:
+  imaging_enabled: false
+  field: J2147-8132
+  datacolumn: corrected
+low_high_slice:
+  enabled: false
+  add_to_source_finding: false
+extra:
+  force_calibrate: false
+  images_globs: []
+  xmatch_pairs: []
+  positions: []
+  flux: {}
+  refresh_metadata:
+    expected_field: J2147-8132
+    reference_epoch: CMC1_1785941476_4kL
+    test_epoch: CMC2_1785065779_1kL
+    corrected_data_provenance: 'REPLACE: record SDP export/split provenance and selected
+      data column; no new CASA calibration'
+    spectral_setup: 'REPLACE: record channel frequencies/widths and any averaging
+      for BOTH MSs'

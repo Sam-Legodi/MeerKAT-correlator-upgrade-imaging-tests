@@ -1,0 +1,85 @@
+{
+  "comparisons": [
+    {
+      "epoch": "1785059546_4kL",
+      "reference": "CMC1_1785941476_4kL",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/1785059546_4kL/reports/imaging_verification/draft_1785059546_4kL_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1785065779_1kL",
+      "reference": "CMC1_1785941476_4kL",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/1785065779_1kL/reports/imaging_verification/draft_1785065779_1kL_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1784443274_8kL",
+      "reference": "CMC1_1785941476_4kL",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/reports/imaging_verification/draft_1784443274_8kL_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1784437450_32kL",
+      "reference": "CMC1_1785941476_4kL",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/l_wide/reports/imaging_verification/draft_1784437450_32kL_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1785659477_4kS4",
+      "reference": "CMC1_1787557158_4kS4",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/s4/reports/imaging_verification/draft_1785659477_4kS4_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1785652878_8kS4",
+      "reference": "CMC1_1787557158_4kS4",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/s4/reports/imaging_verification/draft_1785652878_8kS4_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1785567678_32kS4",
+      "reference": "CMC1_1787557158_4kS4",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/s4/reports/imaging_verification/draft_1785567678_32kS4_imaging_verification_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    },
+    {
+      "epoch": "1788421870_1kS4",
+      "reference": "CMC1_1787557158_4kS4",
+      "original_metrics": "/Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/mci_pipeline_processing/data/image_only_comparisons/s4/reports/imaging_verification/draft_1788421870_1kS4_imaging_verification_1788421870_1kS4_metrics.json",
+      "historical_match_gates_arcsec": [
+        5.0,
+        5.0,
+        5.0
+      ]
+    }
+  ],
+  "missing_local_inputs": []
+}

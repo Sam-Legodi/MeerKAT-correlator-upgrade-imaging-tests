@@ -1,0 +1,92 @@
+# Explicit existing image/catalogue inputs; fresh output directory.
+# Use xm, pos, flux, report individually. Do not use images/all with this draft.
+# src is optional only if catalogues are absent. No recalibration.
+project_name: SDP image report refresh 1785652878_8kS4
+path_vars:
+  repo_root: /Users/samuel/SARAO/MK+/Correlator/MeerKAT-correlator-upgrade-imaging-tests
+  obs_root: /Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations
+  output_root: ${repo_root}/data/report_refresh/1785652878_8kS4
+paths:
+  raw_dir: ${output_root}/raw
+  interim_dir: ${output_root}/interim
+  processed_dir: ${output_root}/processed
+  reports_dir: ${output_root}/reports
+  sky_xmatches_dir: ${output_root}/processed/Sky-CrossMatches
+reference:
+  name: CMC1_1787557158_4kS4
+  ms_paths: []
+  images:
+  - ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_PB.fits
+  - ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_lowband.fits
+  - ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_highband.fits
+tests:
+- name: CMC2_1785652878_8kS4
+  ms_paths: []
+  images:
+  - ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_PB.fits
+  - ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_lowband.fits
+  - ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_highband.fits
+frequency_ranges:
+  lowband_hz:
+  - 2676000000.0
+  - 2850000000.0
+  highband_hz:
+  - 3250000000.0
+  - 3455000000.0
+casa:
+  imaging_enabled: false
+  field: J2147-8132
+  datacolumn: corrected
+low_high_slice:
+  enabled: false
+  add_to_source_finding: false
+pybdsf:
+  thresh_isl: 3.5
+  thresh_pix: 5.0
+  adaptive_rms_box: false
+  overwrite: false
+xmatch:
+  max_sep_arcsec: 5.0 arcsec
+extra:
+  force_calibrate: false
+  images_globs: []
+  uncertainty:
+    bootstrap_samples: 5000
+    confidence_level: 0.6826894921370859
+    random_seed: 20260911
+  xmatch_pairs:
+  - - ${obs_root}/1787557158_cmc1_4kS4/images/pybdsf.results/1787557158_continuum_image_J2147-8132_IClean_PB/1787557158_continuum_image_J2147-8132_IClean_PB-source-cat.fits
+    - ${obs_root}/1785652878_8kS4/images/pybdsf.results/1785652878_continuum_image_J2147-8132_IClean_PB/1785652878_continuum_image_J2147-8132_IClean_PB-source-cat.fits
+    - ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_mfs.fits
+  - - ${obs_root}/1787557158_cmc1_4kS4/images/pybdsf.results/1787557158_continuum_image_J2147-8132_IClean_lowband/1787557158_continuum_image_J2147-8132_IClean_lowband-source-cat.fits
+    - ${obs_root}/1785652878_8kS4/images/pybdsf.results/1785652878_continuum_image_J2147-8132_IClean_lowband/1785652878_continuum_image_J2147-8132_IClean_lowband-source-cat.fits
+    - ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_low.fits
+  - - ${obs_root}/1787557158_cmc1_4kS4/images/pybdsf.results/1787557158_continuum_image_J2147-8132_IClean_highband/1787557158_continuum_image_J2147-8132_IClean_highband-source-cat.fits
+    - ${obs_root}/1785652878_8kS4/images/pybdsf.results/1785652878_continuum_image_J2147-8132_IClean_highband/1785652878_continuum_image_J2147-8132_IClean_highband-source-cat.fits
+    - ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_high.fits
+  positions:
+  - xmatch_table: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_mfs.fits
+    ref_fits: ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_PB.fits
+    other_fits: ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_PB.fits
+    otherdatatag: 1785652878_8kS4_mfs
+  - xmatch_table: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_low.fits
+    ref_fits: ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_lowband.fits
+    other_fits: ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_lowband.fits
+    otherdatatag: 1785652878_8kS4_low
+  - xmatch_table: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_high.fits
+    ref_fits: ${obs_root}/1787557158_cmc1_4kS4/images/1787557158_continuum_image_J2147-8132_IClean_highband.fits
+    other_fits: ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_highband.fits
+    otherdatatag: 1785652878_8kS4_high
+  verification_report:
+    config_path: /Users/samuel/SARAO/MK+/Correlator/MeerKAT-correlator-upgrade-imaging-tests/configs/report_refresh/imaging/1785652878_8kS4.yaml
+    calibration_status: Not assessed
+    calibration_finding: No new calibration-report review requested in this refresh;
+      visibility QA is a separate product.
+    image_status: Not assessed
+    image_finding: Existing image diagnostics are included where available; no new
+      visual assessment is asserted.
+  flux:
+    ref_low_xmatch: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_low.fits
+    ref_high_xmatch: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_high.fits
+    ref_mfs_xmatch: ${output_root}/processed/Sky-CrossMatches/CMC1_1787557158_4kS4_X_CMC2_1785652878_8kS4_mfs.fits
+    docx_name: 1785652878_8kS4_flux.docx
