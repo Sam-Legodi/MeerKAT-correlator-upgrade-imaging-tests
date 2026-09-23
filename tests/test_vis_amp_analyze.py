@@ -59,6 +59,9 @@ def test_acceptance_summary_applies_strict_limits_and_worst_spectrum() -> None:
         ]
     )
 
+    scan_stats["BASE"] = ["0-0", "0-0", "0-1"]
+    scan_stats["SCAN"] = [1, 2, 1]
+
     summary = acceptance_summary(scan_stats, flagging)
     auto = summary[(summary.CLASS == "auto") & (summary.POL == "XX")].iloc[0]
     cross = summary[(summary.CLASS == "cross") & (summary.POL == "XX")].iloc[0]
@@ -68,6 +71,43 @@ def test_acceptance_summary_applies_strict_limits_and_worst_spectrum() -> None:
     assert cross.FLAG_STATUS == "Concern"
     assert cross.OSC_STATUS == "Concern"
     assert cross.OSC_MAX_PCT == 1.0
+
+
+def test_oscillation_eligibility_and_robust_scatter():
+    values = 10 + 0.001 * np.sin(np.arange(401))
+    valid = np.ones(401, dtype=bool)
+    clean = spectrum_metrics(values, valid)["OSC_FRAC"]
+    values[200] = 10000
+    assert spectrum_metrics(values, valid)["OSC_FRAC"] < 0.01
+    assert clean < 0.01
+    assert np.isnan(spectrum_metrics(values, valid, flag_fraction=0.20)["OSC_FRAC"])
+    assert np.isnan(spectrum_metrics(values, valid, flag_fraction=np.nan)["OSC_FRAC"])
+    assert np.isnan(spectrum_metrics(np.zeros(401), valid)["OSC_FRAC"])
+    valid[:] = False
+    valid[:50] = True
+    assert np.isfinite(spectrum_metrics(values, valid, expected_channels=100)["OSC_FRAC"])
+    valid[49] = False
+    assert np.isnan(spectrum_metrics(values, valid, expected_channels=100)["OSC_FRAC"])
+
+
+def test_baseline_medians_resist_one_scan_outlier_and_keep_warning():
+    frame = pd.DataFrame([
+        dict(CLASS="cross", POL="XX", BASE=f"0-{b}", SCAN=s, OSC_FRAC=.005)
+        for b in range(1, 11) for s in range(3)
+    ])
+    frame.loc[0, "OSC_FRAC"] = 10.0
+    flags = pd.DataFrame([dict(CLASS="cross", POL="XX", FLAGGED=1, TOTAL=100)])
+    result = acceptance_summary(frame, flags).iloc[0]
+    assert result.OSC_STATUS == "Pass"
+    assert result.OSC_OUTLIER_WARNING
+    assert result.OSC_MAX_FRAC == 10.0
+    assert result.OSC_BASELINE_P95_FRAC == .005
+    frame.loc[1, "OSC_FRAC"] = 10.0
+    assert acceptance_summary(frame, flags).iloc[0].OSC_STATUS == "Concern"
+    frame["OSC_FRAC"] = np.nan
+    result = acceptance_summary(frame, flags).iloc[0]
+    assert result.OSC_STATUS == "Not assessed"
+    assert result.N_UNASSESSED_SPECTRA == 30
 
 
 def test_single_panel_skips_absent_classes_and_nonfinite_products(tmp_path, monkeypatch):

@@ -6,8 +6,9 @@ channel mask from the MeasurementSet flags, and measures scan-averaged
 amplitude spectra.  Spectral RMS and amplitude oscillation are measured after
 subtracting a 51-channel, third-order Savitzky--Golay trend by default.
 
-Acceptance limits are strict: flagging fraction < 20% and fractional amplitude
-oscillation < 1% are Pass; values at or above a limit are Concern.
+Oscillation uses robust residual scale (MAD with IQR safeguard) / median amplitude.
+Acceptance requires baseline-median p95 <1% and <5% of spectra exceeding 1%.
+Flagging acceptance remains strictly <20%.
 """
 
 from __future__ import annotations
@@ -230,8 +231,17 @@ def spectrum_metrics(
     valid_mask: np.ndarray,
     window: int = DEFAULT_SAVGOL_WINDOW,
     order: int = DEFAULT_SAVGOL_ORDER,
+    *,
+    expected_channels: Optional[int] = None,
+    flag_fraction: float = 0.0,
+    minimum_amplitude: float = 1e-12,
 ) -> Dict[str, float]:
-    """Measure the mean, detrended RMS and fractional oscillation of a spectrum."""
+    """Keep legacy mean/RMS; assess oscillation with MAD/IQR robust scale.
+
+    Coverage is relative to the aggregate RFI-mask channels, before local flags.
+    The amplitude floor is in the input data's amplitude units. Ineligible
+    spectra retain their diagnostic mean/RMS but have NaN OSC_FRAC.
+    """
     values = np.asarray(amplitude, dtype=float)
     valid = np.asarray(valid_mask, dtype=bool) & np.isfinite(values)
     count = int(np.count_nonzero(valid))
@@ -240,7 +250,21 @@ def spectrum_metrics(
     mean = float(np.nanmean(values[valid]))
     residual = _detrend_amp(values, window=window, order=order, valid_mask=valid)
     rms = float(np.nanstd(residual[valid]))
-    oscillation = rms / abs(mean) if np.isfinite(mean) and mean != 0.0 else np.nan
+    median = float(np.median(values[valid]))
+    robust_rms = 1.4826 * float(np.median(np.abs(
+        residual[valid] - np.median(residual[valid])
+    )))
+    # MAD can collapse for alternating two-level signals with an odd count.
+    # Gaussian-normalized IQR preserves sensitivity to that real ringing.
+    q25, q75 = np.percentile(residual[valid], [25, 75])
+    robust_rms = max(robust_rms, float((q75 - q25) / 1.3489795))
+    expected = values.size if expected_channels is None else expected_channels
+    eligible = (
+        expected > 0 and count >= 0.5 * expected
+        and np.isfinite(median) and abs(median) > minimum_amplitude
+        and np.isfinite(flag_fraction) and 0 <= flag_fraction < FLAGGING_ACCEPTANCE_LIMIT
+    )
+    oscillation = robust_rms / abs(median) if eligible else np.nan
     return {
         "MEAN": mean,
         "RMS": rms,
@@ -292,7 +316,7 @@ def acceptance_summary(
         flag_fraction = _weighted_flag_fraction(flags)
         oscillations = pd.to_numeric(
             spectra.get("OSC_FRAC", pd.Series(dtype=float)), errors="coerce"
-        ).dropna()
+        ).replace([np.inf, -np.inf], np.nan).dropna()
         median_osc = float(oscillations.median()) if not oscillations.empty else np.nan
         p95_osc = (
             float(np.nanpercentile(oscillations.to_numpy(), 95))
@@ -305,6 +329,15 @@ def acceptance_summary(
             if not oscillations.empty
             else np.nan
         )
+        # Equal weight per physical baseline: collapse SPWs within each scan,
+        # then scans within each baseline, then take the array's upper tail.
+        assessed = spectra.loc[np.isfinite(pd.to_numeric(spectra.OSC_FRAC, errors="coerce"))]
+        scan_medians = assessed.groupby(["BASE", "SCAN"])["OSC_FRAC"].median()
+        baseline_medians = scan_medians.groupby(level="BASE").median()
+        primary = float(baseline_medians.quantile(0.95)) if len(baseline_medians) else np.nan
+        status = _acceptance_status(primary, oscillation_limit)
+        if status == "Pass" and concern_fraction >= 0.05:
+            status = "Concern"
         rows.append(
             {
                 "CLASS": correlation_class,
@@ -319,7 +352,12 @@ def acceptance_summary(
                 "OSC_MAX_PCT": 100.0 * max_osc,
                 "OSC_LIMIT_PCT": 100.0 * oscillation_limit,
                 "OSC_CONCERN_FRACTION": concern_fraction,
-                "OSC_STATUS": _acceptance_status(max_osc, oscillation_limit),
+                "OSC_BASELINE_P95_FRAC": primary,
+                "OSC_BASELINE_P95_PCT": 100.0 * primary,
+                "OSC_OUTLIER_WARNING": bool(status == "Pass" and max_osc >= oscillation_limit),
+                "OSC_STATUS": status,
+                "N_ASSESSED_BASELINES": int(len(baseline_medians)),
+                "N_UNASSESSED_SPECTRA": int(len(spectra) - len(assessed)),
                 "N_SCAN_BASELINE_SPECTRA": int(len(oscillations)),
             }
         )
@@ -475,7 +513,7 @@ def _figure_caption(path: Path) -> str:
     if name.startswith("flagging"):
         quantity = "Fraction of input visibility samples flagged, including row flags; the dashed line marks the 20% acceptance limit."
     elif name.startswith("oscillation"):
-        quantity = "Maximum detrended spectral RMS divided by mean amplitude across scan/baseline spectra; the dashed line marks the 1% acceptance limit."
+        quantity = "95th percentile across baseline spectra of robust residual scale (MAD with IQR safeguard) divided by median amplitude in each scan; the dashed line marks the 1% acceptance limit."
     elif name.startswith("rms"):
         quantity = "Median spectral RMS after subtracting the configured Savitzky-Golay trend from scan-averaged amplitude spectra in RFI-free channels."
     else:
@@ -753,6 +791,8 @@ def analyze_single(
                                     valid[:, pol_index],
                                     window=window,
                                     order=order,
+                                    expected_channels=int(rfi_mask[:, pol_index].sum()),
+                                    flag_fraction=float(row_flags[:, pol_index].mean()),
                                 )
                                 flag_fraction = float(row_flags[:, pol_index].mean())
                                 oscillation = metrics["OSC_FRAC"]
@@ -802,7 +842,10 @@ def analyze_single(
                     for pol_index, pol in enumerate(pol_labels):
                         valid = (aggregate["COUNT"][:, pol_index] > 0) & rfi_mask[:, pol_index]
                         metrics = spectrum_metrics(
-                            average[:, pol_index], valid, window=window, order=order
+                            average[:, pol_index], valid, window=window, order=order,
+                            expected_channels=int(rfi_mask[:, pol_index].sum()),
+                            flag_fraction=(aggregate["FLAGGED"][pol_index] / aggregate["TOTAL"][pol_index]
+                                           if aggregate["TOTAL"][pol_index] else np.nan),
                         )
                         total = int(aggregate["TOTAL"][pol_index])
                         flagged = int(aggregate["FLAGGED"][pol_index])
@@ -860,7 +903,13 @@ def analyze_single(
     scan_group = ["SCAN", "CLASS", "POL"]
     mean_by_scan = scan_stats.groupby(scan_group, as_index=False)["MEAN"].median()
     rms_by_scan = scan_stats.groupby(scan_group, as_index=False)["RMS"].median()
-    osc_by_scan = scan_stats.groupby(scan_group, as_index=False)["OSC_FRAC"].max()
+    osc_scan_baselines = scan_stats.groupby(
+        scan_group + ["BASE"], as_index=False
+    )["OSC_FRAC"].median()
+    osc_by_scan = osc_scan_baselines.groupby(scan_group)["OSC_FRAC"].quantile(0.95).reset_index()
+    osc_by_scan["OSC_MAX_FRAC"] = scan_stats.groupby(scan_group)["OSC_FRAC"].max().reindex(
+        pd.MultiIndex.from_frame(osc_by_scan[scan_group])
+    ).to_numpy()
     osc_by_scan["OSC_PCT"] = 100.0 * osc_by_scan["OSC_FRAC"]
     osc_by_scan["OSC_STATUS"] = osc_by_scan["OSC_FRAC"].map(
         lambda value: _acceptance_status(value, OSCILLATION_ACCEPTANCE_LIMIT)
@@ -988,7 +1037,7 @@ def analyze_single(
             "OSC_FRAC",
             "Amplitude oscillation",
             "Scan",
-            "Maximum RMS / mean",
+            "P95 robust scatter / median amplitude",
             output_dir / "oscillation_vs_scan_split.png",
             limit=OSCILLATION_ACCEPTANCE_LIMIT,
         ),
@@ -1099,9 +1148,12 @@ def analyze_single(
             )
             document.add_paragraph(
                 "Pass requires flagging <20% and fractional amplitude oscillation "
-                "<1%. The oscillation decision is conservative: any assessed "
-                "scan/baseline spectrum at or above 1% gives Concern for that "
-                "auto/cross class and polarisation."
+                "<1%. Oscillation uses max(1.4826 residual MAD, residual IQR/1.3489795) "
+                "divided by median amplitude. "
+                "Assessment requires at least 50% of expected RFI-mask channels, median amplitude "
+                ">1e-12 in input units, and scan/baseline flagging <20%. "
+                "Pass requires p95 of baseline scan medians <1% and fewer than 5% of assessed "
+                "spectra >=1%. Missing assessments are counted separately; maxima remain diagnostics."
             )
             document.add_heading("Acceptance summary", level=2)
             table = document.add_table(rows=1, cols=6)
@@ -1110,7 +1162,7 @@ def analyze_single(
                 "Pol",
                 "Flagging",
                 "Decision",
-                "Maximum oscillation",
+                "P95 baseline-median oscillation",
                 "Decision",
             ]
             for cell, heading in zip(table.rows[0].cells, headings):
@@ -1122,11 +1174,18 @@ def analyze_single(
                     row.POL,
                     f"{row.FLAG_PCT:.2f}%",
                     row.FLAG_STATUS,
-                    f"{row.OSC_MAX_PCT:.2f}%",
+                    f"{row.OSC_BASELINE_P95_PCT:.2f}%",
                     row.OSC_STATUS,
                 ]
                 for cell, value in zip(cells, values):
                     cell.text = str(value)
+                document.add_paragraph(
+                    f"{row.CLASS} {row.POL}: maximum {row.OSC_MAX_PCT:.2f}%; "
+                    f"spectra >=1%: {100 * row.OSC_CONCERN_FRACTION:.2f}%; "
+                    f"assessed baselines: {row.N_ASSESSED_BASELINES}; "
+                    f"unassessed spectra: {row.N_UNASSESSED_SPECTRA}. "
+                    + ("Isolated-outlier warning." if row.OSC_OUTLIER_WARNING else "")
+                )
             document.add_heading("Diagnostic figures", level=2)
             for figure in figures:
                 document.add_picture(str(figure), width=Inches(6.5))
