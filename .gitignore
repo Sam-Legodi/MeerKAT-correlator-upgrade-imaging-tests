@@ -34,3 +34,8 @@ data/**
 data/**
 !data/**/.gitkeep
 
+
+# Private project notes
+/REPORT_WORDING_PATCH_LOG.md
+/NEXT_CYCLE_CODEX_PLANNING_PROMPT.md
+/IMAGING_VERIFICATION_IMPLEMENTATION_LOG.md
