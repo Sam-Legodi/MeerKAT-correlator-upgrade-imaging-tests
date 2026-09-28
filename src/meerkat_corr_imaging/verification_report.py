@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -33,16 +34,15 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from .uncertainty import (UncertaintyConfig, ONE_SIGMA, column, enrich_matches,
-    bootstrap, wilson, ratio_error, measurement, decision, position_covariance,
+    bootstrap, wilson, ratio_error, measurement, position_covariance,
     format_uncertainty, write_json, catalogue_intervals)
+from .reference_comparison import (comparison_config, degradation_decision,
+    parity_decision, position_reference_test, visibility_exposure)
 from .astrometry import fit_rigid
 from .config import Config
 from .output_paths import draft_docx_path, save_report
 
 
-POSITION_LIMIT_ARCSEC = 1.0
-FLUX_LIMIT_FRACTION = 0.05
-RMS_RATIO_LIMIT = 1.2
 RMS_ANNULUS_DEG = (0.25, 0.50)
 MIN_QUALITY_MATCHES = 10
 
@@ -95,13 +95,13 @@ class BandResult:
     rigid_fit: RigidFit | None
     total_flux_ratio_median: float | None
     total_flux_abs_deviation_p95: float | None
-    total_flux_fraction_beyond_limit: float | None
     peak_flux_ratio_median: float | None
     flux_status: str
     reference_rms_jy_per_beam: float | None
     test_rms_jy_per_beam: float | None
     rms_ratio: float | None
     rms_status: str
+    expected_rms_jy_per_beam: float | None = None
     uncertainties: dict = field(default_factory=dict)
     decisions: dict = field(default_factory=dict)
     uncertainty_provenance: dict = field(default_factory=dict)
@@ -307,6 +307,7 @@ def _score_band(
     catalogue_counts: tuple[int | None, int | None],
     uncertainty_config: UncertaintyConfig | None = None,
     matched_output: Path | None = None,
+    exposure_ratio_reference_over_test: float | None = None,
 ) -> BandResult:
     reference_state = _correction_state(item["reference_image"])
     test_state = _correction_state(item["test_image"])
@@ -317,6 +318,7 @@ def _score_band(
         )
 
     uc = uncertainty_config or UncertaintyConfig()
+    decision_uc = comparison_config(uc)
     uncertainties = {}
     table = enrich_matches(Table.read(item["xmatch_table"]), uc)
     table["analysis_row_index"] = np.arange(len(table))
@@ -329,7 +331,7 @@ def _score_band(
     enough = len(quality) >= MIN_QUALITY_MATCHES
     separation_median = separation_p95 = separation_max = None
     rigid_fit = None
-    total_ratio_median = total_p95 = total_fraction = peak_ratio_median = None
+    total_ratio_median = total_p95 = peak_ratio_median = None
 
     if enough:
         reference_coord = SkyCoord(column(quality,"RA_1",u.deg), column(quality,"DEC_1",u.deg), unit="deg")
@@ -370,7 +372,6 @@ def _score_band(
         if total_ratio.size:
             total_ratio_median = float(np.median(total_ratio))
             total_p95 = float(np.percentile(np.abs(total_ratio - 1.0), 95))
-            total_fraction = float(np.mean(np.abs(total_ratio - 1.0) > FLUX_LIMIT_FRACTION))
 
         reference_peak = column(quality, "Peak_flux_1", u.Jy/u.beam)
         test_peak = column(quality, "Peak_flux_2", u.Jy/u.beam)
@@ -384,8 +385,11 @@ def _score_band(
         if peak_ratio.size:
             peak_ratio_median = float(np.median(peak_ratio))
 
+    decision_intervals = {}
     if enough:
         uncertainties.update(catalogue_intervals(quality, uc))
+        decision_intervals = catalogue_intervals(quality, decision_uc)
+    uncertainties["decision_95"] = decision_intervals
 
     for prefix in ("reference", "test"):
         try:
@@ -397,25 +401,38 @@ def _score_band(
             reference_rms = value
         else:
             test_rms = value
-    rms_ratio = test_rms/reference_rms if _finite(test_rms) and _finite(reference_rms) and reference_rms > 0 else None
-    _, rms_error = ratio_error(test_rms, reference_rms,
+    expected_rms = (reference_rms * np.sqrt(exposure_ratio_reference_over_test)
+                    if _finite(reference_rms) and exposure_ratio_reference_over_test is not None
+                    and np.isfinite(exposure_ratio_reference_over_test) and exposure_ratio_reference_over_test > 0 else None)
+    rms_ratio = test_rms/expected_rms if _finite(test_rms) and _finite(expected_rms) and expected_rms > 0 else None
+    expected_error = (uncertainties["reference_rms_jy_per_beam"].get("standard_error") or np.nan)
+    if expected_rms is not None:
+        expected_error *= np.sqrt(exposure_ratio_reference_over_test)
+    _, rms_error = ratio_error(test_rms if test_rms is not None else np.nan,
+        expected_rms if expected_rms is not None else np.nan,
         uncertainties["test_rms_jy_per_beam"].get("standard_error"),
-        uncertainties["reference_rms_jy_per_beam"].get("standard_error"))
+        expected_error)
     uncertainties["rms_ratio"] = measurement(rms_ratio if rms_ratio is not None else np.nan, float(rms_error), uc)
+    rms_decision_interval = measurement(rms_ratio if rms_ratio is not None else np.nan,
+                                        float(rms_error), decision_uc)
+    position_cov = np.empty((0, 2, 2))
+    translation = translation_cov = None
+    if enough:
+        position_cov = np.full((len(quality), 2, 2), np.nan)
+        position_cov[:, 0, 0] = column(quality, "east_offset_err_arcsec")**2
+        position_cov[:, 1, 1] = column(quality, "north_offset_err_arcsec")**2
+        position_cov[:, 0, 1] = position_cov[:, 1, 0] = column(quality, "east_north_cov_arcsec2")
+        if rigid_fit is not None:
+            translation = [rigid_fit.translation_east_arcsec, rigid_fit.translation_north_arcsec]
+            if rigid_fit.bootstrap_parameter_covariance is not None:
+                translation_cov = np.asarray(rigid_fit.bootstrap_parameter_covariance, float)[:2, :2]
     decisions = {
-        "position": decision(separation_p95, uncertainties.get("separation_p95_arcsec"), POSITION_LIMIT_ARCSEC),
-        "flux": decision(total_ratio_median, uncertainties.get("total_flux_ratio_median"), FLUX_LIMIT_FRACTION, target=1.),
-        "rms": decision(rms_ratio, uncertainties.get("rms_ratio"), RMS_RATIO_LIMIT),
+        "position": position_reference_test(separation_p95, position_cov, translation, translation_cov, decision_uc),
+        "flux": parity_decision(decision_intervals.get("total_flux_ratio_median")),
+        "rms": degradation_decision(rms_decision_interval, 1.0),
     }
-    # A configured reporting confidence may differ, but acceptance is always 1 sigma.
-    if uc.confidence_level != ONE_SIGMA:
-        decision_cfg = UncertaintyConfig(uc.bootstrap_samples, ONE_SIGMA, uc.random_seed)
-        if enough:
-            decision_intervals = catalogue_intervals(quality, decision_cfg)
-            decisions["position"] = decision(separation_p95, decision_intervals['separation_p95_arcsec'], POSITION_LIMIT_ARCSEC)
-            if total_ratio.size:
-                decisions["flux"] = decision(total_ratio_median, decision_intervals['total_flux_ratio_median'], FLUX_LIMIT_FRACTION, target=1.)
-        decisions["rms"] = decision(rms_ratio, measurement(rms_ratio if rms_ratio is not None else np.nan, float(rms_error), decision_cfg), RMS_RATIO_LIMIT)
+    decisions["rms"]["conditional"] = True
+    decisions["rms"]["assumption"] = "XX exposure represents the imaged parallel hands; equal effective visibility weights and comparable imaging weighting"
 
     return BandResult(
         band=item["band"],
@@ -434,15 +451,15 @@ def _score_band(
         rigid_fit=rigid_fit,
         total_flux_ratio_median=total_ratio_median,
         total_flux_abs_deviation_p95=total_p95,
-        total_flux_fraction_beyond_limit=total_fraction,
         peak_flux_ratio_median=peak_ratio_median,
         flux_status=decisions["flux"]["status"],
         reference_rms_jy_per_beam=reference_rms,
         test_rms_jy_per_beam=test_rms,
         rms_ratio=rms_ratio,
         rms_status=decisions["rms"]["status"],
+        expected_rms_jy_per_beam=expected_rms,
         uncertainties=uncertainties, decisions=decisions,
-        uncertainty_provenance={**asdict(uc), "decision_confidence_level": ONE_SIGMA,
+        uncertainty_provenance={**asdict(uc), "decision_confidence_level": decision_uc.confidence_level,
             "measurement_assumption": "independent catalogues; no input covariance supplied",
             "quality_row_indices": column(quality, "analysis_row_index").astype(int).tolist(),
             "valid_position_errors": int(np.isfinite(column(table, "separation_err_arcsec")).sum()),
@@ -596,28 +613,24 @@ def _page_heading(doc: Document, text: str):
     return heading
 
 
-def _plot_acceptance(results: list[BandResult], output: Path) -> None:
+def _plot_acceptance(results: list[BandResult], output: Path,
+                     test_label: str = "GPU", reference_label: str = "CMC1") -> None:
     labels = [result.band.replace(" band", "") for result in results]
     colors = ["#3A7D8C", "#5B8E7D", "#C47F3A"]
     figure, axes = plt.subplots(2, 2, figsize=(9.2, 6.6))
     panels = [
-        (axes[0, 0], [result.separation_p95_arcsec for result in results], POSITION_LIMIT_ARCSEC, "Raw radial separation p95", "arcsec"),
-        (axes[0, 1], [None if result.total_flux_ratio_median is None else 100 * abs(result.total_flux_ratio_median - 1) for result in results], 100 * FLUX_LIMIT_FRACTION, "Median integrated-flux error", "%"),
-        (axes[1, 0], [result.rms_ratio for result in results], RMS_RATIO_LIMIT, "Measured / CMC1 RMS", "ratio"),
+        (axes[0, 0], [result.separation_p95_arcsec for result in results], None, "Raw radial separation p95", "arcsec"),
+        (axes[0, 1], [result.total_flux_ratio_median for result in results], 1.0, "Median integrated-flux ratio", "GPU / CMC1"),
+        (axes[1, 0], [result.rms_ratio for result in results], 1.0, "Measured / expected RMS", "ratio"),
         (axes[1, 1], [None if result.rigid_fit is None else 1000 * result.rigid_fit.rotation_deg for result in results], None, "Rigid field rotation", "millidegree"),
     ]
     panel_uncertainties = []
     for result in results:
-        flux = result.uncertainties.get("total_flux_ratio_median", {})
+        flux = result.decisions.get("flux", {})
         lo, hi = flux.get("ci_low"), flux.get("ci_high")
-        flux_interval = {}
-        if lo is not None and hi is not None:
-            flux_interval = dict(ci_low=100*(0 if lo <= 1 <= hi else min(abs(lo-1), abs(hi-1))),
-                                 ci_high=100*max(abs(lo-1), abs(hi-1)))
-        rotation = result.rigid_fit.uncertainties.get("rotation_deg", {}) if result.rigid_fit else {}
-        rotation_interval = {k: v*1000 for k, v in rotation.items() if k in ("ci_low", "ci_high") and v is not None}
-        panel_uncertainties.append([result.uncertainties.get("separation_p95_arcsec", {}),
-            flux_interval, result.uncertainties.get("rms_ratio", {}), rotation_interval])
+        flux_interval = dict(ci_low=lo, ci_high=hi)
+        panel_uncertainties.append([result.uncertainties.get("decision_95", {}).get("separation_p95_arcsec", {}),
+            flux_interval, result.decisions.get("rms", {}), {}])
     for panel_index, (axis, values, limit, title, ylabel) in enumerate(panels):
         numeric = [0.0 if not _finite(value) else float(value) for value in values]
         bars = axis.bar(labels, numeric, color=colors[: len(labels)], width=0.62)
@@ -636,13 +649,21 @@ def _plot_acceptance(results: list[BandResult], output: Path) -> None:
                 axis.hlines([lo, hi], index-.06, index+.06, color="black", lw=1.2)
         axis.margins(y=.18)
         if limit is not None:
-            axis.axhline(limit, color="#9C2F2F", linestyle="--", linewidth=1.2, label=f"limit {limit:g}")
+            axis.axhline(limit, color="#777777", linestyle="--", linewidth=1.2, label="CMC1 parity")
             axis.legend(frameon=False, fontsize=8)
         axis.set_title(title, fontsize=10, color="#17365D")
         axis.set_ylabel(ylabel)
         axis.grid(axis="y", linestyle=":", alpha=0.45)
         axis.spines[["top", "right"]].set_visible(False)
-    figure.suptitle("Acceptance metrics by image product", fontsize=14, color="#17365D", fontweight="bold")
+    null_limits = [r.decisions.get("position", {}).get("noise_only_p95", {}).get("ci_high") for r in results]
+    for index, value in enumerate(null_limits):
+        if _finite(value):
+            axes[0, 0].scatter(index, value, marker="x", color="#9C2F2F", s=55,
+                               label="95% noise-only upper bound" if index == next(i for i, x in enumerate(null_limits) if _finite(x)) else None)
+    if any(_finite(value) for value in null_limits):
+        axes[0, 0].legend(frameon=False, fontsize=8)
+    figure.suptitle(f"GPU {test_label} versus CMC1 {reference_label}", fontsize=14,
+                    color="#17365D", fontweight="bold")
     figure.tight_layout(rect=(0, 0, 1, 0.95))
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=180, bbox_inches="tight")
@@ -679,6 +700,7 @@ def _build_docx(
     calreports: list[Path],
     qa_dir: Path,
     report_cfg: dict[str, Any],
+    visibility_summary: pd.DataFrame | None = None,
 ) -> None:
     observation_label = cfg.tests[0].name.removeprefix("CMC2_")
     reference_label = cfg.reference.name.removeprefix("CMC1_")
@@ -704,7 +726,7 @@ def _build_docx(
     title = doc.add_paragraph(style="Title")
     title.add_run("Continuum imaging verification")
     subtitle = doc.add_paragraph()
-    subtitle.add_run(f"CMC2 {observation_label} against CMC1 {reference_label}").bold = True
+    subtitle.add_run(f"GPU correlator {observation_label} against CMC1 {reference_label}").bold = True
     subtitle.add_run("\nImage-product assessment • draft technical report")
     subtitle.paragraph_format.space_after = Pt(10)
 
@@ -725,15 +747,16 @@ def _build_docx(
     doc.add_heading("Executive finding", level=1)
     concern_bands = [r.band for r in results if "Concern" in (r.position_status, r.flux_status, r.rms_status)]
     concern_text = ", ".join(concern_bands) if concern_bands else "none"
-    doc.add_paragraph(
-        f"The image-domain assessment is {overall.lower()}. Concern-level results occur in {concern_text}. "
-        "This is not a full visibility-domain acceptance decision: raw visibilities and per-scan images were unavailable for this cycle."
-    )
+    doc.add_paragraph(f"The image-domain assessment is {overall.lower()}. Concern-level results occur in {concern_text}. "
+        "CMC1 defines the nominal performance benchmark. CMC2 denotes the GPU correlator in this work.")
+    if visibility_summary is not None and not visibility_summary.empty:
+        visibility_concerns = int((visibility_summary[["FLAG_STATUS", "OSC_STATUS"]] == "Concern").sum().sum())
+        doc.add_paragraph(f"The paired visibility comparison contains {visibility_concerns} concern-level class/polarisation metrics across flagging and oscillation.")
     for result in results:
         state = result.correction_state
         position = "not assessed" if result.separation_p95_arcsec is None else f"p95 {_metric(result, 'separation_p95_arcsec')} arcsec ({result.position_status.lower()})"
         flux = "not assessed" if result.total_flux_ratio_median is None else f"median integrated-flux ratio {_metric(result, 'total_flux_ratio_median')} ({result.flux_status.lower()})"
-        noise = f"RMS ratio {_metric(result, 'rms_ratio')} ({result.rms_status.lower()})" if result.rms_ratio is not None else "RMS not assessed"
+        noise = f"measured/expected RMS {_metric(result, 'rms_ratio')} ({result.rms_status.lower()}, conditional)" if result.rms_ratio is not None else "RMS not assessed"
         doc.add_paragraph(
             f"{result.band} [{state}]: {position}; {flux}; {noise}.",
             style="List Bullet",
@@ -747,13 +770,13 @@ def _build_docx(
         "The PB-corrected MFS comparison is not combined numerically with the non-PB low- and high-band comparisons."
     )
 
-    _page_heading(doc, "Acceptance results")
+    _page_heading(doc, "CMC1 reference comparison")
     doc.add_paragraph(
-        f"Intervals are {100*results[0].uncertainty_provenance.get('confidence_level', ONE_SIGMA):.2f}% confidence "
-        "(default 68.27%, approximately 1 sigma). Brackets give absolute interval endpoints. "
-        "Catalogue intervals retain the envelope of source-sampling and fixed-sample measurement-propagation intervals where available. "
-        "Pass requires the full 68.27% decision interval to satisfy the existing limit. "
-        "An interval touching or crossing the limit is Concern; unavailable decision uncertainty is Not assessed."
+        "All judgments use 95% intervals. Flux parity is assessed on whether the median GPU/CMC1 integrated-flux ratio interval excludes one. "
+        "Position p95 is compared with a noise-only distribution from the matched catalogue covariance; coherent east/north translation is tested jointly. "
+        "Image RMS is compared with the CMC1 RMS scaled by the effective unflagged exposure ratio. A Concern requires the lower 95% ratio bound to exceed one. "
+        "The RMS judgment assumes comparable visibility and imaging weights. "
+        "Matched-source and descriptive metric intervals retain the configured confidence level; these do not set the decision confidence."
     )
     rows = []
     for result in results:
@@ -767,16 +790,16 @@ def _build_docx(
         [
             "Product",
             "Correction",
-            "Position p95\npass below 1 arcsec",
-            "Median flux ratio\nwithin 0.95–1.05",
-            "RMS ratio\npass below 1.2",
+            "Position p95\nvs noise-only null",
+            "Median GPU/CMC1\nflux ratio",
+            "Measured/expected\nRMS ratio",
         ],
         rows,
     )
     doc.add_picture(str(figure_path), width=Inches(6.7))
     _caption(
         doc,
-        "Figure 1. Acceptance metrics for the MFS, low-band and high-band products. Error bars show the stated confidence intervals; missing bars mean uncertainty is unavailable. Grey bars denote insufficient catalogue evidence.",
+        "Figure 1. CMC1 reference comparisons for the MFS, low-band and high-band products. Position, flux and RMS error bars show 95% intervals; the position cross marks the catalogue-noise null upper bound. Dashed lines indicate flux and RMS parity.",
     )
 
     doc.add_heading("Astrometry and rigid rotation", level=2)
@@ -800,6 +823,11 @@ def _build_docx(
         ["Product", "matched / quality", "median (arcsec)", "p95 (arcsec)", "rotation (deg)", "shift E,N (arcsec)", "post-fit p95", "decision"],
         astrometry_rows,
     )
+    for result in results:
+        upper = result.decisions.get("position", {}).get("noise_only_p95", {}).get("ci_high")
+        chi_square = result.decisions.get("position", {}).get("translation_chi2")
+        doc.add_paragraph(f"{result.band}: 95% noise-only p95 upper bound {_fmt(upper)} arcsec; "
+                          f"joint translation χ² {_fmt(chi_square)} (2 degrees of freedom; 95% critical value 5.991).")
 
     doc.add_heading("Flux density and image noise", level=2)
     flux_rows = []
@@ -811,25 +839,48 @@ def _build_docx(
                 _metric(result, "total_flux_ratio_median"),
                 _metric(result, "peak_flux_ratio_median"),
                 _metric(result, "total_flux_abs_deviation_p95", 100) + "%",
-                _metric(result, "total_flux_fraction_beyond_limit", 100) + "%",
+                _metric(result, "expected_rms_jy_per_beam", 1e6),
                 _metric(result, "rms_ratio"),
                 f"flux {result.flux_status}; RMS {result.rms_status}",
             ]
         )
     _add_table(
         doc,
-        ["Product", "PyBDSF ref / test", "median total ratio", "median peak ratio", "p95 |total−1|", "fraction >5%", "RMS ratio", "decision"],
+        ["Product", "PyBDSF ref / test", "median total ratio", "median peak ratio", "p95 |total−1|", "expected RMS (µJy/beam)", "RMS ratio", "decision"],
         flux_rows,
     )
 
     for result in results:
-        doc.add_paragraph(f"{result.band} annular RMS (µJy/beam): reference "
+        doc.add_paragraph(f"{result.band} annular RMS (µJy/beam): CMC1 "
             f"{_metric(result, 'reference_rms_jy_per_beam', 1e6)}; test "
-            f"{_metric(result, 'test_rms_jy_per_beam', 1e6)}. "
-            "Gaussian MAD-scale uncertainty uses independent beam area, excluding noise-model systematics.")
+            f"{_metric(result, 'test_rms_jy_per_beam', 1e6)}; expected GPU "
+            f"{_metric(result, 'expected_rms_jy_per_beam', 1e6)}. "
+            "The conditional comparison assumes equal effective weights; Gaussian MAD-scale uncertainty excludes noise-model systematics.")
     doc.add_paragraph("Catalogue envelopes are conservative sensitivity bounds, not exact combined-coverage intervals. Missing formal errors leave sampling-only intervals, identified in the metrics JSON. Rigid-fit intervals retain the envelope of positional-covariance GLS and paired-source bootstrap intervals. "
-        "Post-fit intervals refit resampled inliers; match selection and clipping uncertainty are not included. "
-        "Wilson intervals describe the observed fraction above 5%; they do not classify latent true source fluxes.")
+        "Post-fit intervals refit resampled inliers; match selection and clipping uncertainty are not included.")
+
+    if visibility_summary is not None and not visibility_summary.empty:
+        doc.add_heading("Visibility comparison with CMC1", level=2)
+        doc.add_paragraph("Flagging differences are bootstrapped over whole scans. Amplitude-oscillation differences use the 95th percentile of physical-baseline scan medians and are bootstrapped over baselines. "
+            "A Concern requires the lower 95% GPU-minus-CMC1 interval to exceed zero. The 20% flagging criterion selects eligible spectral channels; it is not a performance threshold.")
+        visibility_rows = []
+        for row in visibility_summary.itertuples(index=False):
+            visibility_rows.append([row.CLASS, row.POL,
+                f"{100*row.FLAG_FRAC_GPU:.2f} / {100*row.FLAG_FRAC_CMC1:.2f}",
+                row.FLAG_STATUS,
+                f"{100*row.OSC_BASELINE_P95_FRAC_GPU:.3f} / {100*row.OSC_BASELINE_P95_FRAC_CMC1:.3f}",
+                row.OSC_STATUS])
+        _add_table(doc, ["Class", "Pol", "flag GPU / CMC1 (%)", "flag decision", "osc p95 GPU / CMC1 (%)", "osc decision"], visibility_rows)
+        for row in visibility_summary.itertuples(index=False):
+            doc.add_paragraph(
+                f"{row.CLASS} {row.POL}: flagging GPU−CMC1 difference "
+                f"{_fmt(100*row.FLAG_DELTA_GPU_MINUS_CMC1)} percentage points "
+                f"[95% CI {_fmt(None if pd.isna(row.FLAG_DELTA_CI_LOW) else 100*row.FLAG_DELTA_CI_LOW)}, "
+                f"{_fmt(None if pd.isna(row.FLAG_DELTA_CI_HIGH) else 100*row.FLAG_DELTA_CI_HIGH)}]; "
+                f"oscillation p95 difference {_fmt(100*row.OSC_DELTA_GPU_MINUS_CMC1)} percentage points "
+                f"[95% CI {_fmt(None if pd.isna(row.OSC_DELTA_CI_LOW) else 100*row.OSC_DELTA_CI_LOW)}, "
+                f"{_fmt(None if pd.isna(row.OSC_DELTA_CI_HIGH) else 100*row.OSC_DELTA_CI_HIGH)}].",
+                style="List Bullet")
 
     diagnostic = next(iter(sorted(qa_dir.glob("*_01_combined_plane_diagnostic.png"))), None)
     subbands = next(iter(sorted(qa_dir.glob("*_02_subband_common_scale.png"))), None)
@@ -845,13 +896,11 @@ def _build_docx(
 
     _page_heading(doc, "Calibration-report review")
     _add_status_paragraph(doc, "Visual assessment", calibration_status, calibration_finding)
-    cal_rows = [[str(index), report.name, "Reviewed"] for index, report in enumerate(calreports, 1)]
+    cal_rows = [[str(index), "Calibration diagnostic", "Available"] for index, report in enumerate(calreports, 1)]
     if not cal_rows:
-        cal_rows = [["—", "No calibration-report PDF found", "Not assessed"]]
-    _add_table(doc, ["#", "Calibration-report PDF", "Review state"], cal_rows)
-    doc.add_paragraph(
-        "The calibration-report plots provide contextual visual evidence. The <20% flagging threshold and <1% amplitude-oscillation threshold were not scored because this cycle did not derive the required visibility-domain time, channel, correlation and baseline statistics."
-    )
+        cal_rows = [["—", "No calibration diagnostic available", "Not assessed"]]
+    _add_table(doc, ["#", "Diagnostic", "Review state"], cal_rows)
+    doc.add_paragraph("The calibration-report plots provide contextual visual evidence. Quantitative visibility comparisons are presented above when paired summaries are available.")
 
     doc.add_heading("Checklist disposition", level=1)
     insufficient_catalogue_bands = [
@@ -870,33 +919,37 @@ def _build_docx(
             "Reference and test catalogues were generated for each image product; "
             "all bands met the 10-match minimum for catalogue-derived metrics."
         )
+    def visibility_disposition(column_name: str) -> str:
+        if visibility_summary is None or visibility_summary.empty:
+            return "Not assessed"
+        return "Partial" if (visibility_summary[column_name] == "Not assessed").any() else "Assessed"
+
     checklist = [
         ["Visual inspection of calibration report", calibration_status, calibration_finding],
-        ["Sanity checks and amplitude oscillations", "Not assessed", "Raw visibilities were unavailable."],
-        ["SDP flagging fraction by time/channel/correlation", "Not assessed", "No auto/cross visibility products were available."],
-        ["Scan-averaged mean/RMS by polarisation and antenna/baseline", "Not assessed", "No scan-averaged visibilities were available; the planned method uses a 51-channel, third-order Savitzky–Golay model over an RFI-free flag-derived mask."],
+        ["Sanity checks and amplitude oscillations", visibility_disposition("OSC_STATUS"), "Paired CMC1/GPU baseline-aggregated p95 comparison where summaries are available."],
+        ["SDP flagging fraction by time/channel/correlation", visibility_disposition("FLAG_STATUS"), "Paired CMC1/GPU aggregate fractions by class and polarisation where summaries are available."],
+        ["Scan-averaged mean/RMS by polarisation and antenna/baseline", "Assessed" if visibility_summary is not None else "Not assessed", "Scan-averaged visibility diagnostics use a 51-channel, third-order Savitzky–Golay model over a flag-derived mask."],
         ["Visual inspection of images", image_status, image_finding],
         ["Source positions and relative flux across band", "Assessed", "MFS, low-band and high-band like-for-like comparisons are reported above; time/scan dependence remains unavailable."],
         ["PyBDSF source finding", "Assessed", pybdsf_evidence],
         ["Rotation and position error versus frequency", "Assessed", "Scale-fixed translation plus one rotation was fitted independently to each assessable band."],
-        ["Image RMS versus expected RMS", "Assessed", "CMC1 image RMS is the expected-RMS reference in the same band, correction state and annulus."],
+        ["Image RMS versus expected RMS", "Assessed" if all(r.rms_status != "Not assessed" for r in results) else "Partial", "CMC1 image RMS is scaled by the reference/test effective exposure ratio in the same band, correction state and annulus; the judgment assumes comparable weights."],
     ]
     _add_table(doc, ["Checklist item", "Disposition", "Evidence / limitation"], checklist)
 
     doc.add_heading("Interpretation limits", level=1)
     doc.add_paragraph(
-        "No per-scan images or visibilities were available. Consequently, time-dependent source comparisons, auto/cross-correlation flagging fractions, scan-averaged visibility statistics and amplitude oscillations are outside the scope of this report. "
+        "No per-scan images were available, so time-dependent image-source comparisons remain outside this assessment. "
         "Primary-beam correction was not applied to the low- and high-band products during this cycle. Their results remain valid as non-PB like-for-like comparisons but are not combined with the PB-corrected MFS photometry."
     )
     doc.add_paragraph(
         "A scale change was not fitted in the astrometric model. The reported transformation is restricted to the expected global release-to-release offset: east/north translation plus one rigid rotation about the reference phase centre."
     )
 
-    doc.add_heading("Provenance", level=1)
+    doc.add_heading("Measurement definition", level=1)
     provenance_rows = [
-        ["Configuration", str(report_cfg.get("config_path", "loaded pipeline configuration"))],
-        ["Reference", cfg.reference.name],
-        ["Test", cfg.tests[0].name],
+        ["Reference", f"CMC1 {reference_label}"],
+        ["Test", f"GPU correlator {observation_label}"],
         ["Cross-match gate", str(cfg.xmatch.max_sep_arcsec)],
         ["Quality selection", "S_Code=S and peak-flux S/N ≥ 10 in both catalogues"],
         ["RMS region", f"{RMS_ANNULUS_DEG[0]:.2f}–{RMS_ANNULUS_DEG[1]:.2f} deg annulus"],
@@ -919,11 +972,30 @@ def build_verification_report(cfg: Config) -> Path:
     report_cfg = dict(cfg.extra.get("verification_report") or {})
     catalogue_counts = _catalogue_counts(cfg)
     uc = UncertaintyConfig.from_mapping(cfg.extra.get("uncertainty"))
+    def visibility_directory(explicit, ms_paths):
+        if explicit:
+            return Path(explicit).expanduser()
+        return (Path(cfg.paths.interim_dir) / Path(ms_paths[0]).with_suffix("").name) if ms_paths else None
+
+    reference_visibility = visibility_directory(report_cfg.get("reference_visibility_results"), cfg.reference.ms_paths)
+    test_visibility = visibility_directory(report_cfg.get("test_visibility_results"), cfg.tests[0].ms_paths)
+    exposure_info: dict[str, Any] = {"reference": None, "test": None, "ratio_reference_over_test": None}
+    if reference_visibility is not None and test_visibility is not None:
+        try:
+            exposure_info["reference"] = visibility_exposure(reference_visibility)
+            exposure_info["test"] = visibility_exposure(test_visibility)
+            exposure_info["ratio_reference_over_test"] = (exposure_info["reference"]["effective_exposure"]
+                / exposure_info["test"]["effective_exposure"])
+        except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
+            exposure_info["reason"] = str(exc)
+    else:
+        exposure_info["reason"] = "paired visibility summaries unavailable"
     observation_label = cfg.tests[0].name.removeprefix("CMC2_")
     output_dir = Path(cfg.paths.reports_dir).expanduser() / "imaging_verification"
     results = [
         _score_band(item, catalogue_counts.get(item["band"], (None, None)), uc,
-            output_dir / f"{observation_label}_{index}_matched_uncertainties.fits")
+            output_dir / f"{observation_label}_{index}_matched_uncertainties.fits",
+            exposure_info["ratio_reference_over_test"])
         for index, item in enumerate(inputs)
     ]
 
@@ -934,25 +1006,33 @@ def build_verification_report(cfg: Config) -> Path:
     )
     output = Path(draft_docx_path(requested_output, observation_label)).expanduser()
     figure_path = output_dir / "figures" / f"{observation_label}_acceptance_metrics.png"
-    _plot_acceptance(results, figure_path)
+    _plot_acceptance(results, figure_path, observation_label,
+                     cfg.reference.name.removeprefix("CMC1_"))
 
     test_image = Path(inputs[0]["test_image"])
     observation_dir = test_image.parent.parent
     calreports = sorted((observation_dir / "calreports").glob("*.pdf"))
     qa_dir = observation_dir / "mfimage_frequency_assessment"
-    _build_docx(output, cfg, results, figure_path, calreports, qa_dir, report_cfg)
+    visibility_summary = None
+    if reference_visibility is not None and test_visibility is not None:
+        try:
+            from .vis_amp_analyze import compare_results
+            visibility_summary = compare_results({"outdir": test_visibility}, {"outdir": reference_visibility},
+                                                 output_dir, uc)
+        except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
+            exposure_info["visibility_comparison_reason"] = str(exc)
+    _build_docx(output, cfg, results, figure_path, calreports, qa_dir, report_cfg, visibility_summary)
 
     metrics_path = output.with_name(output.stem + "_metrics.json")
     payload = {
         "test": cfg.tests[0].name,
         "reference": cfg.reference.name,
-        "thresholds": {
-            "position_p95_arcsec": POSITION_LIMIT_ARCSEC,
-            "median_integrated_flux_fraction": FLUX_LIMIT_FRACTION,
-            "rms_ratio": RMS_RATIO_LIMIT,
-        },
+        "comparison_confidence_level": 0.95,
+        "reference_comparison": "CMC1 nominal benchmark; position noise and joint translation, two-sided flux parity, one-sided scaled RMS degradation",
         "rms_annulus_deg": list(RMS_ANNULUS_DEG),
+        "rms_exposure": exposure_info,
         "bands": [asdict(result) for result in results],
+        "visibility_comparison": None if visibility_summary is None else visibility_summary.to_dict(orient="records"),
         "calibration_reports": [str(path) for path in calreports],
     }
     payload["uncertainty"] = asdict(uc)

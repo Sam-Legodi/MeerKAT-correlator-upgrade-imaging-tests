@@ -7,8 +7,7 @@ amplitude spectra.  Spectral RMS and amplitude oscillation are measured after
 subtracting a 51-channel, third-order Savitzky--Golay trend by default.
 
 Oscillation uses robust residual scale (MAD with IQR safeguard) / median amplitude.
-Acceptance requires baseline-median p95 <1% and <5% of spectra exceeding 1%.
-Flagging acceptance remains strictly <20%.
+Decisions compare the GPU observation with the paired CMC1 reference at 95% confidence.
 """
 
 from __future__ import annotations
@@ -30,7 +29,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .uncertainty import cluster_comparison, UncertaintyConfig, write_json
+from .uncertainty import cluster_comparison, UncertaintyConfig, write_json, interval
+from .reference_comparison import comparison_config, degradation_decision
 from .output_paths import draft_docx_path, save_report
 
 try:
@@ -57,8 +57,6 @@ except Exception:
 DEFAULT_SAVGOL_WINDOW = 51
 DEFAULT_SAVGOL_ORDER = 3
 DEFAULT_RFI_FLAG_THRESHOLD = 0.20
-FLAGGING_ACCEPTANCE_LIMIT = 0.20
-OSCILLATION_ACCEPTANCE_LIMIT = 0.01
 CHUNK_ROWS = 2048
 
 logging.basicConfig(
@@ -234,6 +232,7 @@ def spectrum_metrics(
     *,
     expected_channels: Optional[int] = None,
     flag_fraction: float = 0.0,
+    flag_threshold: float = DEFAULT_RFI_FLAG_THRESHOLD,
     minimum_amplitude: float = 1e-12,
 ) -> Dict[str, float]:
     """Keep legacy mean/RMS; assess oscillation with MAD/IQR robust scale.
@@ -262,7 +261,7 @@ def spectrum_metrics(
     eligible = (
         expected > 0 and count >= 0.5 * expected
         and np.isfinite(median) and abs(median) > minimum_amplitude
-        and np.isfinite(flag_fraction) and 0 <= flag_fraction < FLAGGING_ACCEPTANCE_LIMIT
+        and np.isfinite(flag_fraction) and 0 <= flag_fraction < flag_threshold
     )
     oscillation = robust_rms / abs(median) if eligible else np.nan
     return {
@@ -279,9 +278,8 @@ def spectrum_metrics(
 
 
 def _acceptance_status(value: float, limit: float) -> str:
-    if not np.isfinite(value):
-        return "Not assessed"
-    return "Pass" if value < limit else "Concern"
+    # A single observation has no nominal-performance verdict without CMC1.
+    return "Not assessed"
 
 
 def _weighted_flag_fraction(frame: pd.DataFrame) -> float:
@@ -294,10 +292,10 @@ def _weighted_flag_fraction(frame: pd.DataFrame) -> float:
 def acceptance_summary(
     scan_stats: pd.DataFrame,
     flagging_by_channel: pd.DataFrame,
-    flag_limit: float = FLAGGING_ACCEPTANCE_LIMIT,
-    oscillation_limit: float = OSCILLATION_ACCEPTANCE_LIMIT,
+    flag_limit: float | None = None,
+    oscillation_limit: float | None = None,
 ) -> pd.DataFrame:
-    """Summarise strict Pass/Concern decisions by auto/cross class and polarisation."""
+    """Summarise observation diagnostics pending a paired CMC1 comparison."""
     keys = set()
     for frame in (scan_stats, flagging_by_channel):
         if not frame.empty and {"CLASS", "POL"}.issubset(frame.columns):
@@ -324,37 +322,31 @@ def acceptance_summary(
             else np.nan
         )
         max_osc = float(oscillations.max()) if not oscillations.empty else np.nan
-        concern_fraction = (
-            float((oscillations >= oscillation_limit).mean())
-            if not oscillations.empty
-            else np.nan
-        )
+        concern_fraction = np.nan
         # Equal weight per physical baseline: collapse SPWs within each scan,
         # then scans within each baseline, then take the array's upper tail.
         assessed = spectra.loc[np.isfinite(pd.to_numeric(spectra.OSC_FRAC, errors="coerce"))]
         scan_medians = assessed.groupby(["BASE", "SCAN"])["OSC_FRAC"].median()
         baseline_medians = scan_medians.groupby(level="BASE").median()
         primary = float(baseline_medians.quantile(0.95)) if len(baseline_medians) else np.nan
-        status = _acceptance_status(primary, oscillation_limit)
-        if status == "Pass" and concern_fraction >= 0.05:
-            status = "Concern"
+        status = "Not assessed"
         rows.append(
             {
                 "CLASS": correlation_class,
                 "POL": polarisation,
                 "FLAG_FRAC": flag_fraction,
                 "FLAG_PCT": 100.0 * flag_fraction,
-                "FLAG_LIMIT_PCT": 100.0 * flag_limit,
-                "FLAG_STATUS": _acceptance_status(flag_fraction, flag_limit),
+                "FLAG_LIMIT_PCT": np.nan,
+                "FLAG_STATUS": "Not assessed",
                 "OSC_MEDIAN_FRAC": median_osc,
                 "OSC_P95_FRAC": p95_osc,
                 "OSC_MAX_FRAC": max_osc,
                 "OSC_MAX_PCT": 100.0 * max_osc,
-                "OSC_LIMIT_PCT": 100.0 * oscillation_limit,
+                "OSC_LIMIT_PCT": np.nan,
                 "OSC_CONCERN_FRACTION": concern_fraction,
                 "OSC_BASELINE_P95_FRAC": primary,
                 "OSC_BASELINE_P95_PCT": 100.0 * primary,
-                "OSC_OUTLIER_WARNING": bool(status == "Pass" and max_osc >= oscillation_limit),
+                "OSC_OUTLIER_WARNING": False,
                 "OSC_STATUS": status,
                 "N_ASSESSED_BASELINES": int(len(baseline_medians)),
                 "N_UNASSESSED_SPECTRA": int(len(spectra) - len(assessed)),
@@ -405,7 +397,7 @@ def _flag_counter_frame(
                     "FLAG_FRAC": fraction,
                     "FLAG_PCT": 100.0 * fraction,
                     "FLAG_STATUS": _acceptance_status(
-                        fraction, FLAGGING_ACCEPTANCE_LIMIT
+                        fraction, None
                     ),
                 }
             )
@@ -511,9 +503,9 @@ def _add_baseline_lengths(scan_stats, antenna_positions):
 def _figure_caption(path: Path) -> str:
     name = path.stem
     if name.startswith("flagging"):
-        quantity = "Fraction of input visibility samples flagged, including row flags; the dashed line marks the 20% acceptance limit."
+        quantity = "Fraction of input visibility samples flagged, including row flags."
     elif name.startswith("oscillation"):
-        quantity = "95th percentile across baseline spectra of robust residual scale (MAD with IQR safeguard) divided by median amplitude in each scan; the dashed line marks the 1% acceptance limit."
+        quantity = "95th percentile across baseline spectra of robust residual scale (MAD with IQR safeguard) divided by median amplitude in each scan."
     elif name.startswith("rms"):
         quantity = "Median spectral RMS after subtracting the configured Savitzky-Golay trend from scan-averaged amplitude spectra in RFI-free channels."
     else:
@@ -699,7 +691,7 @@ def analyze_single(
                                 "FLAG_FRAC": fraction,
                                 "FLAG_PCT": 100.0 * fraction,
                                 "FLAG_STATUS": _acceptance_status(
-                                    fraction, FLAGGING_ACCEPTANCE_LIMIT
+                                    fraction, None
                                 ),
                                 "RFI_FREE": bool(
                                     rfi_masks[correlation_class][spw][channel, pol_index]
@@ -793,6 +785,7 @@ def analyze_single(
                                     order=order,
                                     expected_channels=int(rfi_mask[:, pol_index].sum()),
                                     flag_fraction=float(row_flags[:, pol_index].mean()),
+                                    flag_threshold=rfi_flag_threshold,
                                 )
                                 flag_fraction = float(row_flags[:, pol_index].mean())
                                 oscillation = metrics["OSC_FRAC"]
@@ -812,11 +805,11 @@ def analyze_single(
                                         "OSC_FRAC": oscillation,
                                         "OSC_PCT": 100.0 * oscillation,
                                         "OSC_STATUS": _acceptance_status(
-                                            oscillation, OSCILLATION_ACCEPTANCE_LIMIT
+                                            oscillation, None
                                         ),
                                         "FLAG_FRAC": flag_fraction,
                                         "FLAG_STATUS": _acceptance_status(
-                                            flag_fraction, FLAGGING_ACCEPTANCE_LIMIT
+                                            flag_fraction, None
                                         ),
                                         "RFI_FREE_CHANNELS": int(rfi_mask[:, pol_index].sum()),
                                         "VALID_CHANNELS": metrics["N_VALID"],
@@ -846,6 +839,7 @@ def analyze_single(
                             expected_channels=int(rfi_mask[:, pol_index].sum()),
                             flag_fraction=(aggregate["FLAGGED"][pol_index] / aggregate["TOTAL"][pol_index]
                                            if aggregate["TOTAL"][pol_index] else np.nan),
+                            flag_threshold=rfi_flag_threshold,
                         )
                         total = int(aggregate["TOTAL"][pol_index])
                         flagged = int(aggregate["FLAGGED"][pol_index])
@@ -866,13 +860,13 @@ def analyze_single(
                                 "OSC_FRAC": oscillation,
                                 "OSC_PCT": 100.0 * oscillation,
                                 "OSC_STATUS": _acceptance_status(
-                                    oscillation, OSCILLATION_ACCEPTANCE_LIMIT
+                                    oscillation, None
                                 ),
                                 "FLAGGED": flagged,
                                 "TOTAL": total,
                                 "FLAG_FRAC": flag_fraction,
                                 "FLAG_STATUS": _acceptance_status(
-                                    flag_fraction, FLAGGING_ACCEPTANCE_LIMIT
+                                    flag_fraction, None
                                 ),
                                 "RFI_FREE_CHANNELS": int(rfi_mask[:, pol_index].sum()),
                                 "VALID_CHANNELS": metrics["N_VALID"],
@@ -912,7 +906,7 @@ def analyze_single(
     ).to_numpy()
     osc_by_scan["OSC_PCT"] = 100.0 * osc_by_scan["OSC_FRAC"]
     osc_by_scan["OSC_STATUS"] = osc_by_scan["OSC_FRAC"].map(
-        lambda value: _acceptance_status(value, OSCILLATION_ACCEPTANCE_LIMIT)
+        lambda value: _acceptance_status(value, None)
     )
 
     scan_antenna_parts = [
@@ -939,7 +933,7 @@ def analyze_single(
     for grouped_stats in (scan_antenna_stats, antenna_stats, baseline_stats):
         grouped_stats["OSC_PCT"] = 100.0 * grouped_stats["OSC_FRAC"]
         grouped_stats["OSC_STATUS"] = grouped_stats["OSC_FRAC"].map(
-            lambda value: _acceptance_status(value, OSCILLATION_ACCEPTANCE_LIMIT)
+            lambda value: _acceptance_status(value, None)
         )
 
     lengths = scan_stats[["BASE", "CLASS", "BASELINE_LENGTH_M"]].drop_duplicates()
@@ -1039,7 +1033,7 @@ def analyze_single(
             "Scan",
             "P95 robust scatter / median amplitude",
             output_dir / "oscillation_vs_scan_split.png",
-            limit=OSCILLATION_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
         _plot_two_classes(
             flag_by_scan,
@@ -1049,7 +1043,7 @@ def analyze_single(
             "Scan",
             "Flagging fraction",
             output_dir / "flagging_vs_scan_split.png",
-            limit=FLAGGING_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
         _plot_two_classes(
             flag_by_time,
@@ -1059,7 +1053,7 @@ def analyze_single(
             "Elapsed time (h)",
             "Flagging fraction",
             output_dir / "flagging_vs_time_split.png",
-            limit=FLAGGING_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
         _plot_two_classes(
             flag_by_channel,
@@ -1069,7 +1063,7 @@ def analyze_single(
             "Channel",
             "Flagging fraction",
             output_dir / "flagging_by_channel.png",
-            limit=FLAGGING_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
         _plot_category(
             antenna_stats,
@@ -1094,7 +1088,7 @@ def analyze_single(
             "Flagging by antenna",
             "Flagging fraction",
             output_dir / "flagging_per_antenna_split.png",
-            limit=FLAGGING_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
         _plot_two_classes(
             baseline_stats,
@@ -1122,7 +1116,7 @@ def analyze_single(
             "Baseline length (m)",
             "Flagging fraction",
             output_dir / "flagging_vs_baseline_split.png",
-            limit=FLAGGING_ACCEPTANCE_LIMIT,
+            limit=None,
         ),
     ]
 
@@ -1131,12 +1125,10 @@ def analyze_single(
     if HAVE_DOCX:
         try:
             document = Document()
-            document.add_paragraph("Flagging fractions are exact counts for the selected data, not binomial estimates of a sampled population. "
-                "Measurement uncertainties of spectral means, detrended RMS and oscillations are unavailable without channel covariance. "
-                "Reference/test dataset comparisons provide whole-scan bootstrap sampling intervals when at least two scans exist on each side; "
-                "the method assumes independent scans and preserves dependence within each scan.")
+            document.add_paragraph("Flagging fractions are exact counts for the selected data. "
+                "A performance decision requires a paired CMC1 reference observation. "
+                "The reference comparison uses independent whole-scan and physical-baseline bootstrap intervals at 95% confidence.")
             document.add_heading("Visibility-domain verification", level=1)
-            document.add_paragraph(f"MeasurementSet: {ms_path}")
             if field_name:
                 document.add_paragraph(f"Field: {field_name}")
             document.add_paragraph(
@@ -1147,23 +1139,18 @@ def analyze_single(
                 "Savitzky–Golay trend."
             )
             document.add_paragraph(
-                "Pass requires flagging <20% and fractional amplitude oscillation "
-                "<1%. Oscillation uses max(1.4826 residual MAD, residual IQR/1.3489795) "
-                "divided by median amplitude. "
-                "Assessment requires at least 50% of expected RFI-mask channels, median amplitude "
-                ">1e-12 in input units, and scan/baseline flagging <20%. "
-                "Pass requires p95 of baseline scan medians <1% and fewer than 5% of assessed "
-                "spectra >=1%. Missing assessments are counted separately; maxima remain diagnostics."
+                "Oscillation is max(1.4826 residual MAD, residual IQR/1.3489795) "
+                "divided by median amplitude. Eligibility requires at least 50% of expected RFI-mask channels, "
+                "nonzero median amplitude, and scan/baseline flagging below the mask threshold. "
+                "The baseline-aggregated p95 is compared with CMC1 after both observations are analysed."
             )
-            document.add_heading("Acceptance summary", level=2)
-            table = document.add_table(rows=1, cols=6)
+            document.add_heading("Observation diagnostics", level=2)
+            table = document.add_table(rows=1, cols=4)
             headings = [
                 "Class",
                 "Pol",
                 "Flagging",
-                "Decision",
                 "P95 baseline-median oscillation",
-                "Decision",
             ]
             for cell, heading in zip(table.rows[0].cells, headings):
                 cell.text = heading
@@ -1173,18 +1160,14 @@ def analyze_single(
                     row.CLASS,
                     row.POL,
                     f"{row.FLAG_PCT:.2f}%",
-                    row.FLAG_STATUS,
                     f"{row.OSC_BASELINE_P95_PCT:.2f}%",
-                    row.OSC_STATUS,
                 ]
                 for cell, value in zip(cells, values):
                     cell.text = str(value)
                 document.add_paragraph(
                     f"{row.CLASS} {row.POL}: maximum {row.OSC_MAX_PCT:.2f}%; "
-                    f"spectra >=1%: {100 * row.OSC_CONCERN_FRACTION:.2f}%; "
                     f"assessed baselines: {row.N_ASSESSED_BASELINES}; "
                     f"unassessed spectra: {row.N_UNASSESSED_SPECTRA}. "
-                    + ("Isolated-outlier warning." if row.OSC_OUTLIER_WARNING else "")
                 )
             document.add_heading("Diagnostic figures", level=2)
             for figure in figures:
@@ -1205,15 +1188,54 @@ def analyze_single(
     return output_paths
 
 
+def _flagging_reference_interval(test: pd.DataFrame, reference: pd.DataFrame,
+                                 config: UncertaintyConfig) -> dict:
+    rng = np.random.default_rng(config.random_seed)
+    points, samples = [], []
+    for frame in (test, reference):
+        frame = frame.loc[(frame.TOTAL > 0) & np.isfinite(frame.FLAGGED)].groupby("SCAN", as_index=False)[["FLAGGED", "TOTAL"]].sum()
+        flagged, total = frame.FLAGGED.to_numpy(float), frame.TOTAL.to_numpy(float)
+        points.append(float(flagged.sum()/total.sum()) if len(frame) and total.sum() > 0 else np.nan)
+        if len(frame) < 2:
+            samples.append(None)
+            continue
+        indices = rng.integers(0, len(frame), size=(config.bootstrap_samples, len(frame)))
+        samples.append(flagged[indices].sum(axis=1)/total[indices].sum(axis=1))
+    draws = samples[0] - samples[1] if all(x is not None for x in samples) else []
+    return {"gpu": points[0], "cmc1": points[1], "difference_gpu_minus_cmc1": points[0]-points[1],
+            "difference_interval": interval(draws, points[0]-points[1], config,
+                method="independent whole-scan bootstrap of aggregate flagged/total fraction"),
+            "n_scans_gpu": int(test.SCAN.nunique()), "n_scans_cmc1": int(reference.SCAN.nunique())}
+
+
+def _oscillation_reference_interval(test: pd.DataFrame, reference: pd.DataFrame,
+                                    config: UncertaintyConfig) -> dict:
+    rng = np.random.default_rng(config.random_seed)
+    points, samples, counts = [], [], []
+    for frame in (test, reference):
+        frame = frame.loc[np.isfinite(pd.to_numeric(frame.OSC_FRAC, errors="coerce"))]
+        scan_median = frame.groupby(["BASE", "SCAN"])["OSC_FRAC"].median()
+        baseline = scan_median.groupby(level="BASE").median().to_numpy(float)
+        baseline = baseline[np.isfinite(baseline)]
+        counts.append(len(baseline))
+        points.append(float(np.percentile(baseline, 95)) if len(baseline) else np.nan)
+        if len(baseline) < 2:
+            samples.append(None)
+            continue
+        indices = rng.integers(0, len(baseline), size=(config.bootstrap_samples, len(baseline)))
+        samples.append(np.percentile(baseline[indices], 95, axis=1))
+    draws = samples[0] - samples[1] if all(x is not None for x in samples) else []
+    return {"gpu": points[0], "cmc1": points[1], "difference_gpu_minus_cmc1": points[0]-points[1],
+            "difference_interval": interval(draws, points[0]-points[1], config,
+                method="independent physical-baseline bootstrap of baseline-aggregated p95 oscillation"),
+            "n_baselines_gpu": counts[0], "n_baselines_cmc1": counts[1]}
+
+
 def compare_results(
     result_a: Dict[str, Path], result_b: Dict[str, Path], outdir: Path,
     uncertainty_config: UncertaintyConfig | None = None,
-) -> None:
-    """Compare scan-averaged statistics with whole-scan sampling intervals.
-
-    Operational FLAG gates remain exact census checks. No independent-channel
-    error is invented for the correlated, detrended spectral RMS/oscillation.
-    """
+) -> pd.DataFrame | None:
+    """Compare GPU flagging and oscillation with CMC1 at 95% confidence."""
     try:
         a = pd.read_csv(result_a["outdir"] / "scan_averaged_amp_stats.csv")
         b = pd.read_csv(result_b["outdir"] / "scan_averaged_amp_stats.csv")
@@ -1238,19 +1260,77 @@ def compare_results(
             merged_summary[f"{metric}_B"] - merged_summary[f"{metric}_A"]
         )
     comparison_uncertainties = []
+    comparison_config_95 = comparison_config(uncertainty_config)
     for index, row in merged_summary.iterrows():
         selection_a = a[(a['CLASS'] == row['CLASS']) & (a['POL'] == row['POL'])]
         selection_b = b[(b['CLASS'] == row['CLASS']) & (b['POL'] == row['POL'])]
         for metric in ('MEAN', 'RMS', 'OSC_FRAC', 'FLAG_FRAC'):
             groups = [[group[metric].to_numpy(dtype=float) for _, group in frame.groupby('SCAN')]
                       for frame in (selection_a, selection_b)]
-            info = cluster_comparison(*groups, uncertainty_config)
+            info = cluster_comparison(*groups, comparison_config_95)
             comparison_uncertainties.append({'CLASS': row['CLASS'], 'POL': row['POL'], 'metric': metric, 'dataset_a': info['reference'], 'dataset_b': info['test'], 'difference_b_minus_a': info['difference'], 'measurement_uncertainty': info['measurement_uncertainty']})
             for label, part in [('A', 'reference'), ('B', 'test'), ('DELTA_B_MINUS_A', 'difference')]:
                 for field in ('ci_low', 'ci_high', 'standard_error'):
                     merged_summary.loc[index, f'{metric}_{label}_{field.upper()}'] = info[part][field]
     merged_summary.to_csv(outdir / "compare_dataset_summary.csv", index=False)
     write_json(outdir / 'compare_uncertainties.json', {'dataset_a_input': str(result_a['outdir']), 'dataset_b_input': str(result_b['outdir']), 'metrics': comparison_uncertainties})
+
+    flags_a = pd.read_csv(result_a["outdir"] / "flagging_vs_scan.csv")
+    flags_b = pd.read_csv(result_b["outdir"] / "flagging_vs_scan.csv")
+    rows, detailed = [], []
+    keys = set(map(tuple, a[["CLASS", "POL"]].drop_duplicates().values)) | set(map(tuple, b[["CLASS", "POL"]].drop_duplicates().values))
+    for correlation_class, polarisation in sorted(keys):
+        choose = lambda frame: frame[(frame.CLASS == correlation_class) & (frame.POL == polarisation)]
+        flag = _flagging_reference_interval(choose(flags_a), choose(flags_b), comparison_config_95)
+        osc = _oscillation_reference_interval(choose(a), choose(b), comparison_config_95)
+        flag_decision = degradation_decision(flag["difference_interval"])
+        osc_decision = degradation_decision(osc["difference_interval"])
+        detailed.append({"class": correlation_class, "polarisation": polarisation,
+                         "flagging": {**flag, "decision": flag_decision},
+                         "oscillation": {**osc, "decision": osc_decision}})
+        rows.append({"CLASS": correlation_class, "POL": polarisation,
+                     "FLAG_FRAC_GPU": flag["gpu"], "FLAG_FRAC_CMC1": flag["cmc1"],
+                     "FLAG_DELTA_GPU_MINUS_CMC1": flag["difference_gpu_minus_cmc1"],
+                     "FLAG_DELTA_CI_LOW": flag["difference_interval"]["ci_low"],
+                     "FLAG_DELTA_CI_HIGH": flag["difference_interval"]["ci_high"],
+                     "FLAG_STATUS": flag_decision["status"],
+                     "OSC_BASELINE_P95_FRAC_GPU": osc["gpu"], "OSC_BASELINE_P95_FRAC_CMC1": osc["cmc1"],
+                     "OSC_DELTA_GPU_MINUS_CMC1": osc["difference_gpu_minus_cmc1"],
+                     "OSC_DELTA_CI_LOW": osc["difference_interval"]["ci_low"],
+                     "OSC_DELTA_CI_HIGH": osc["difference_interval"]["ci_high"],
+                     "OSC_STATUS": osc_decision["status"]})
+    pd.DataFrame(rows).to_csv(outdir / "acceptance_summary.csv", index=False)
+    write_json(outdir / "reference_comparison.json", {"benchmark": "CMC1", "test": "GPU correlator",
+        "confidence_level": 0.95, "rule": "Concern when lower 95% GPU-minus-CMC1 interval exceeds zero",
+        "comparisons": detailed})
+    if HAVE_DOCX and result_a.get("report"):
+        document = Document(result_a["report"])
+        document.add_heading("CMC1 reference comparison", level=1)
+        document.add_paragraph("CMC1 is the nominal-performance benchmark. CMC2 denotes the GPU correlator in this work. "
+            "A Concern is assigned only when the lower 95% interval for GPU minus CMC1 exceeds zero. "
+            "Flagging uses whole-scan bootstrap resampling of aggregate fractions; oscillation uses independent physical-baseline resampling of the baseline-aggregated p95. "
+            "Unavailable intervals are Not assessed. The 20% flagging value remains an eligibility mask, not an acceptance limit.")
+        table = document.add_table(rows=1, cols=6)
+        for cell, heading in zip(table.rows[0].cells, ["Class", "Pol", "Flag GPU / CMC1", "Flag decision", "Osc p95 GPU / CMC1", "Osc decision"]):
+            cell.text = heading
+        for row in rows:
+            cells = table.add_row().cells
+            values = [row["CLASS"], row["POL"],
+                f'{100*row["FLAG_FRAC_GPU"]:.2f}% / {100*row["FLAG_FRAC_CMC1"]:.2f}%', row["FLAG_STATUS"],
+                f'{100*row["OSC_BASELINE_P95_FRAC_GPU"]:.3f}% / {100*row["OSC_BASELINE_P95_FRAC_CMC1"]:.3f}%', row["OSC_STATUS"]]
+            for cell, value in zip(cells, values):
+                cell.text = str(value)
+            def ci_percent(low, high):
+                return "unavailable" if low is None or high is None else f"[{100*low:.3f}, {100*high:.3f}]"
+            def percent(value):
+                return "unavailable" if value is None or not np.isfinite(value) else f"{100*value:.3f}"
+            document.add_paragraph(
+                f'{row["CLASS"]} {row["POL"]}: GPU−CMC1 flagging difference '
+                f'{percent(row["FLAG_DELTA_GPU_MINUS_CMC1"])} percentage points, 95% CI '
+                f'{ci_percent(row["FLAG_DELTA_CI_LOW"], row["FLAG_DELTA_CI_HIGH"])}; '
+                f'oscillation p95 difference {percent(row["OSC_DELTA_GPU_MINUS_CMC1"])} percentage points, 95% CI '
+                f'{ci_percent(row["OSC_DELTA_CI_LOW"], row["OSC_DELTA_CI_HIGH"])}.')
+        save_report(document, result_a["report"])
 
     for metric in ("MEAN", "RMS", "OSC_FRAC", "FLAG_FRAC"):
         group_keys = ["SCAN", "CLASS", "POL"]
@@ -1263,6 +1343,7 @@ def compare_results(
         pd.merge(grouped_a, grouped_b, on=group_keys, how="outer").sort_values(
             ["CLASS", "POL", "SCAN"]
         ).to_csv(outdir / f"compare_{metric.lower()}_vs_scan.csv", index=False)
+    return pd.DataFrame(rows)
 
 
 def main() -> None:

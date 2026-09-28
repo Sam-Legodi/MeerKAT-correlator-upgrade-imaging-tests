@@ -78,6 +78,8 @@ extra:
     other_fits: ${obs_root}/1785652878_8kS4/images/1785652878_continuum_image_J2147-8132_IClean_highband.fits
     otherdatatag: 1785652878_8kS4_high
   verification_report:
+    reference_visibility_results: /Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/consolidated_reports/S4/S4_SDPflags+cal/interim/1787557158_J2147_SDPflags+cal.cmc14kS4
+    test_visibility_results: /Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/consolidated_reports/S4/S4_SDPflags+cal/interim/1785652878_J2147_SDPflags+cal.8kS4
     config_path: /Users/samuel/SARAO/MK+/Correlator/MeerKAT-correlator-upgrade-imaging-tests/configs/report_refresh/imaging/1785652878_8kS4.yaml
     calibration_status: Not assessed
     calibration_finding: No new calibration-report review requested in this refresh;

@@ -5,6 +5,7 @@ import pandas as pd
 
 from meerkat_corr_imaging.vis_amp_analyze import (
     acceptance_summary,
+    compare_results,
     derive_rfi_free_channel_mask,
     spectrum_metrics,
 )
@@ -44,7 +45,7 @@ def test_spectrum_metrics_detect_one_percent_oscillation_concern() -> None:
     assert metrics["OSC_FRAC"] > 0.01
 
 
-def test_acceptance_summary_applies_strict_limits_and_worst_spectrum() -> None:
+def test_single_observation_diagnostics_defer_reference_decisions() -> None:
     scan_stats = pd.DataFrame(
         [
             {"CLASS": "auto", "POL": "XX", "OSC_FRAC": 0.005},
@@ -66,10 +67,10 @@ def test_acceptance_summary_applies_strict_limits_and_worst_spectrum() -> None:
     auto = summary[(summary.CLASS == "auto") & (summary.POL == "XX")].iloc[0]
     cross = summary[(summary.CLASS == "cross") & (summary.POL == "XX")].iloc[0]
 
-    assert auto.FLAG_STATUS == "Pass"
-    assert auto.OSC_STATUS == "Pass"
-    assert cross.FLAG_STATUS == "Concern"
-    assert cross.OSC_STATUS == "Concern"
+    assert auto.FLAG_STATUS == "Not assessed"
+    assert auto.OSC_STATUS == "Not assessed"
+    assert cross.FLAG_STATUS == "Not assessed"
+    assert cross.OSC_STATUS == "Not assessed"
     assert cross.OSC_MAX_PCT == 1.0
 
 
@@ -81,6 +82,8 @@ def test_oscillation_eligibility_and_robust_scatter():
     assert spectrum_metrics(values, valid)["OSC_FRAC"] < 0.01
     assert clean < 0.01
     assert np.isnan(spectrum_metrics(values, valid, flag_fraction=0.20)["OSC_FRAC"])
+    assert np.isfinite(spectrum_metrics(values, valid, flag_fraction=0.30,
+                                        flag_threshold=0.40)["OSC_FRAC"])
     assert np.isnan(spectrum_metrics(values, valid, flag_fraction=np.nan)["OSC_FRAC"])
     assert np.isnan(spectrum_metrics(np.zeros(401), valid)["OSC_FRAC"])
     valid[:] = False
@@ -90,7 +93,7 @@ def test_oscillation_eligibility_and_robust_scatter():
     assert np.isnan(spectrum_metrics(values, valid, expected_channels=100)["OSC_FRAC"])
 
 
-def test_baseline_medians_resist_one_scan_outlier_and_keep_warning():
+def test_baseline_medians_resist_one_scan_outlier():
     frame = pd.DataFrame([
         dict(CLASS="cross", POL="XX", BASE=f"0-{b}", SCAN=s, OSC_FRAC=.005)
         for b in range(1, 11) for s in range(3)
@@ -98,12 +101,12 @@ def test_baseline_medians_resist_one_scan_outlier_and_keep_warning():
     frame.loc[0, "OSC_FRAC"] = 10.0
     flags = pd.DataFrame([dict(CLASS="cross", POL="XX", FLAGGED=1, TOTAL=100)])
     result = acceptance_summary(frame, flags).iloc[0]
-    assert result.OSC_STATUS == "Pass"
-    assert result.OSC_OUTLIER_WARNING
+    assert result.OSC_STATUS == "Not assessed"
+    assert not result.OSC_OUTLIER_WARNING
     assert result.OSC_MAX_FRAC == 10.0
     assert result.OSC_BASELINE_P95_FRAC == .005
     frame.loc[1, "OSC_FRAC"] = 10.0
-    assert acceptance_summary(frame, flags).iloc[0].OSC_STATUS == "Concern"
+    assert acceptance_summary(frame, flags).iloc[0].OSC_STATUS == "Not assessed"
     frame["OSC_FRAC"] = np.nan
     result = acceptance_summary(frame, flags).iloc[0]
     assert result.OSC_STATUS == "Not assessed"
@@ -138,3 +141,24 @@ def test_physical_baseline_lengths():
     frame = pd.DataFrame({'ANT1': [0, 0, 1], 'ANT2': [0, 1, 0]})
     _add_baseline_lengths(frame, np.array([[0, 0, 0], [3, 4, 0]]))
     assert frame.BASELINE_LENGTH_M.tolist() == [0, 5, 5]
+
+
+def test_paired_cmc1_comparison_scores_degradation(tmp_path):
+    gpu, reference = tmp_path / "gpu", tmp_path / "cmc1"
+    gpu.mkdir()
+    reference.mkdir()
+    for directory, flagged, oscillation in ((gpu, 30, .020), (reference, 5, .002)):
+        spectra = pd.DataFrame([
+            dict(CLASS="cross", POL="XX", BASE=f"0-{base}", SCAN=scan,
+                 MEAN=1., RMS=.1, OSC_FRAC=oscillation, FLAG_FRAC=flagged/100)
+            for scan in range(4) for base in range(1, 7)
+        ])
+        spectra.to_csv(directory / "scan_averaged_amp_stats.csv", index=False)
+        pd.DataFrame([dict(CLASS="cross", POL="XX", SCAN=scan, FLAGGED=flagged, TOTAL=100)
+                      for scan in range(4)]).to_csv(directory / "flagging_vs_scan.csv", index=False)
+    compare_results({"outdir": gpu}, {"outdir": reference}, gpu)
+    score = pd.read_csv(gpu / "acceptance_summary.csv").iloc[0]
+    assert score.FLAG_STATUS == "Concern"
+    assert score.OSC_STATUS == "Concern"
+    assert score.FLAG_DELTA_CI_LOW > 0
+    assert score.OSC_DELTA_CI_LOW > 0

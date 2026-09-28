@@ -199,8 +199,18 @@ def test_score_missing_peak_errors_does_not_crash(tmp_path):
     assert result.quality_count == 0
     assert result.position_status == 'Not assessed'
     assert result.flux_status == 'Not assessed'
-    assert result.rms_ratio == 1
+    assert result.rms_ratio is None
+    assert result.rms_status == 'Not assessed'
     assert _overall_status([result], 'Reviewed') == 'Partial'
+    scaled = _score_band({'band':'MFS','reference_image':str(image), 'test_image':str(image),
+                          'xmatch_table':str(cat)}, (1,1), FAST,
+                         exposure_ratio_reference_over_test=.25)
+    assert scaled.expected_rms_jy_per_beam == pytest.approx(result.reference_rms_jy_per_beam/2)
+    assert scaled.rms_ratio == pytest.approx(2)
+    assert scaled.rms_status == 'Concern'
+    assert scaled.decisions['rms']['conditional']
+    assert scaled.uncertainties['rms_ratio']['confidence_level'] == ONE_SIGMA
+    assert scaled.decisions['rms']['confidence_level'] == .95
 
 
 @pytest.mark.parametrize('kwargs', [{'bootstrap_samples':0}, {'bootstrap_samples':3.5},

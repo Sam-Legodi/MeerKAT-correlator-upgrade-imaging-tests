@@ -64,16 +64,19 @@ not a report. Its structure matches `verification_report.py`.
 | RMS ratio | Analytic propagation of independent image-scale SEs |
 | Gain and linear-fit parameters | Both flux axes contribute formal variance; paired-source bootstrap for conditional fitted sample |
 | Sample maximum | Observed extremum; no population-tail CI from ordinary bootstrap; fixed-sample measurement Monte Carlo includes switching of the maximum source |
-| Counts, beam/header values, configured limits | Exact bookkeeping/metadata; no invented measurement error |
+| Counts and beam/header values | Exact bookkeeping/metadata; no invented measurement error |
 | Rayleigh p-values / external panel annotations | Diagnostic statistics, not estimates with invented measurement errors |
-| Visibility summary differences | Scan-cluster sampling intervals where independent scan groups exist; measurement covariance unavailable |
+| Visibility mean/spectral-RMS diagnostics | Scan-cluster sampling intervals where independent scan groups exist; measurement covariance unavailable |
+| Flagging and oscillation decisions | Whole-scan aggregate-fraction and physical-baseline p95 bootstrap differences against CMC1, respectively; 95% intervals |
 
-Default confidence is 0.6826894921370859 (Gaussian +/-1 sigma), 5000 resamples,
-seed 20260911. Absolute CI endpoints remain numeric; asymmetric CIs are retained.
-The user's latest instruction supersedes attachment item 11: existing numerical
-limits stay fixed, but Pass requires the complete 1-sigma decision interval below
-the upper limit (inside 0.95--1.05 for flux). Crossing intervals are Concern;
-missing decision uncertainty is Not assessed. Store point-estimate status too.
+General uncertainty helpers default to 0.6826894921370859 (Gaussian +/-1 sigma),
+5000 resamples and seed 20260911. Performance decisions override the confidence
+level to 95%. Absolute CI endpoints remain numeric; asymmetric CIs are retained.
+CMC1 supplies the nominal benchmark: position is tested
+against the catalogue-noise null and joint translation test, flux against ratio
+one, and exposure-scaled image RMS against ratio one. Supported GPU degradation
+or a flux parity interval excluding one is Concern;
+missing decision uncertainty is Not assessed.
 Sampling intervals do not include common calibration systematics; no quadrature
 addition of population scatter and measurement noise that would double count it.
 

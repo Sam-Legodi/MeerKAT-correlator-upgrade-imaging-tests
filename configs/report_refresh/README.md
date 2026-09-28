@@ -6,21 +6,14 @@ JSON files, rather than guessing filenames from renamed configuration directorie
 `input_manifest.json` records that provenance. All required local images and
 catalogues exist. Output directories are new, leaving previous reports intact.
 
-## Important capability boundary
+## CMC1 reference comparisons
 
-The current `meerkat-ci report` is **image-only**. It does not consume visibility
-CSVs, and its text explicitly excludes visibility assessment. No supported YAML
-setting combines target/gaincal visibility results into that document.
-
-The `vis` command produces separate visibility PDF/DOCX reports and diagnostic
-plots. Whole-scan bootstrap comparison intervals are written to
-`compare_dataset_summary.csv` and `compare_uncertainties.json`; they are **not yet
-plotted or inserted into the visibility PDF/DOCX**. Visibility oscillation gates
-still use point estimates; the 1-sigma image acceptance logic does not apply to
-these visibility gates. Thus these configs refresh all supported products, but a
-combined imaging-plus-visibility report, with visibility error bars and updated
-visibility decisions, needs a subsequent pipeline code change. Do not regard
-running `vis` followed by `report` as achieving that integration.
+`meerkat-ci report` reads the paired J2147 visibility summaries specified under
+`extra.verification_report`, scales expected image RMS by effective exposure,
+and includes flagging and oscillation comparisons in the image report. The
+`vis` command also writes a paired `acceptance_summary.csv`,
+`reference_comparison.json` and a comparison section in its DOCX. A standalone
+reference observation has diagnostics but no Pass/Concern verdict.
 
 ## Inputs
 
@@ -35,9 +28,9 @@ running `vis` followed by `report` as achieving that integration.
 | Visibility comparison | Same-field CMC1 and CMC2 corrected MSs; two or more independent scans per dataset for scan-cluster sampling intervals |
 | Optional contextual figures | Existing observation `mfimage_frequency_assessment/*_01_combined_plane_diagnostic.png` and `*_02_subband_common_scale.png`; calibration PDFs under `calreports/` are contextual, not quantitative visibility inputs |
 
-The regenerated image report uses 5000 samples, seed 20260911 and central 68.27%
-intervals. Missing formal errors stay unavailable; available sampling intervals
-remain separate. Position and flux sampling are conditional on selection.
+Performance decisions use 5000 samples, seed 20260911 and 95% intervals.
+Missing formal errors stay unavailable; available sampling intervals remain
+separate. Position and flux sampling are conditional on selection.
 MFS PB-corrected images and non-PB subbands are compared only like-for-like.
 
 ## Config inventory
@@ -162,8 +155,8 @@ meerkat-ci --config configs/report_refresh/visibility/1788421870_1kS4_J1619-8418
 ```
 
 No explicit uncertainty mapping is placed in visibility YAML: the wrapper does
-not forward one. The comparison helper uses its existing 5000/68.27%/20260911
-defaults. For specialized spectral settings or multi-field MS selection, invoke
+not forward one. The comparison helper uses 5000/95%/20260911 for decisions.
+For specialized spectral settings or multi-field MS selection, invoke
 the underlying module instead; it forwards `--field` to both datasets:
 
 ```bash
@@ -201,10 +194,10 @@ rsync -av USER@SERVER:/home/slegodi/corr_upgrade_tests/2026/report_refresh/ \
 
 Retain the configs/provenance, `scan_averaged_amp_stats.csv`,
 `acceptance_summary.csv`, `flagging_by_channel.csv`, the other flag/scan/baseline
-CSV tables, `compare_dataset_summary.csv`, `compare_uncertainties.json`, PNGs,
+CSV tables, `compare_dataset_summary.csv`, `compare_uncertainties.json`,
+`reference_comparison.json`, PNGs,
 and produced visibility reports for **both fields and reference/test datasets**.
-PDFs alone are not sufficient numerical inputs for future report integration.
-The current image-report builder has no ingestion hook for this directory.
+PDFs alone are not sufficient numerical inputs for a rerun of the image report.
 
 `check_inputs.py` is read-only and does not generate reports. Successful preflight
 checks readability/schema/field selection, not the truth of SDP correction

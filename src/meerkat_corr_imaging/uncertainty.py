@@ -459,8 +459,6 @@ def catalogue_intervals(table, config=None):
             if not complete:
                 propagated['reason'] = 'whole-sample measurement propagation unavailable: missing/invalid formal flux errors'
             output[key] = envelope(sampled, propagated)
-        if kind == 'total':
-            output['total_flux_fraction_beyond_limit'] = wilson(int(np.sum(np.abs(ratio-1) > .05)), len(ratio), cfg)
     xy = np.column_stack((column(table, 'east_offset_arcsec'), column(table, 'north_offset_arcsec')))
     radius = column(table, 'separation_arcsec')
     valid = np.isfinite(radius)

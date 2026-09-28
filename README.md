@@ -342,9 +342,10 @@ What happens:
 * It averages unflagged amplitudes by scan, baseline, spectral window and
   polarisation before calculating the mean and spectral RMS. The RMS is
   measured after subtracting a 51-channel, third-order Savitzky--Golay trend.
-* It reports fractional amplitude oscillation as detrended RMS divided by mean
-  amplitude. Flagging below 20% and oscillation below 1% are `Pass`; values at
-  or above either limit are `Concern`.
+* It reports fractional amplitude oscillation as robust detrended RMS divided by
+  median amplitude. The GPU result is compared with the paired CMC1 result at
+  95% confidence. A `Concern` requires the lower GPU-minus-CMC1 interval bound
+  to exceed zero. The 20% flagging criterion selects eligible spectral channels.
 * Outputs are inspectable CSVs, diagnostic plots, and a concise draft DOCX
   report under the deterministic `data/interim/<msbase>/` directory. A rerun
   replaces same-named generated products in that directory.
@@ -362,10 +363,10 @@ Check after running:
   `oscillation_vs_scan_split.png`, and the remaining QA plots
 * `data/interim/*/draft_vis_amp_summary.docx`
 
-`perrow_amp_stats.csv` is still written for compatibility, but acceptance is
-based on the scan-averaged products. The class/polarisation oscillation result
-is conservative: any assessed scan/baseline spectrum at or above 1% makes that
-class/polarisation a `Concern`.
+`perrow_amp_stats.csv` is still written for compatibility. The comparative
+`acceptance_summary.csv` uses whole-scan resampling for aggregate flagging and
+physical-baseline resampling for baseline-aggregated p95 oscillation. A lone
+observation remains `Not assessed` until paired with CMC1.
 
 #### 3.2 Calibrate & Image with CASA (Step 3)
 
@@ -870,7 +871,7 @@ behavior so uncalibrated samples cannot count as usable corrected samples. Revie
 flagging changes alongside the result. Imaging also runs in a finite batch
 process with disconnected stdin, a runtime limit, and explicit exit.
 
-### Measurement errors and 1-sigma acceptance
+### Measurement errors and CMC1 comparison
 
 The comparison stages preserve PyBDSF formal errors, normalize their units, and
 write numerical uncertainties into matched FITS tables and JSON sidecars. Existing
@@ -886,7 +887,8 @@ extra:
 
 `pos` and `flux` pass these settings to the packaged analysis commands; the same
 commands accept `--bootstrap-samples`, `--confidence-level`, and `--random-seed`.
-The consolidated report reads the mapping directly. All counts must be integers;
+The consolidated report reads the resample count and seed from this mapping and
+uses 95% intervals for performance decisions. All counts must be integers;
 resample count must be at least two. Use at least 5000 for production reports.
 
 Individual flux ratios propagate both catalogue errors. Spherical astrometry
@@ -910,13 +912,15 @@ samples cannot establish a sampling interval. P16/P84 and source standard
 deviations describe the population's scatter; they are not errors on its median
 or mean.
 
-**Acceptance uses 1-sigma bounds.** Numerical limits remain unchanged: raw
-positional p95 <1 arcsec, median integrated flux ratio strictly inside 0.95–1.05,
-and RMS(test)/RMS(reference) <1.2. Pass requires the central estimate and complete
-68.27% decision interval to satisfy the limit. Touching/crossing a limit is Concern.
-Missing decision uncertainty is Not assessed. JSON retains both `point_status`
-and `status`, interval bounds and decision reason. Changing the displayed
-confidence level does not change the decision confidence of 68.27%.
+**Acceptance uses CMC1 as the nominal benchmark at 95% confidence.** Position
+p95 is tested against a source-covariance noise-only distribution, with a joint
+east/north translation test. The median integrated-flux ratio is assessed for
+two-sided parity with one. Expected GPU image RMS is the CMC1 annular RMS scaled
+by the square root of the reference/test effective unflagged exposure ratio;
+the XX cross-correlation exposure proxies the imaged parallel hands. The RMS
+judgment assumes comparable visibility and imaging weights. A one-sided
+Concern requires the lower RMS-ratio interval bound to exceed one. Missing
+decision uncertainty is Not assessed.
 
 Image RMS is the existing annular `1.4826*MAD` estimator. Its sampling standard
 error uses the Gaussian MAD asymptotic variance and effective independent beam
@@ -933,9 +937,11 @@ remain numerical; report formatting uses `value ± error` only for nearly symmet
 intervals and `value [lower, upper]` otherwise.
 
 Visibility dataset comparison CSV/JSON products include whole-scan cluster
-bootstrap intervals for median amplitude, spectral RMS, oscillation, flagging
-fraction, and B-minus-A differences (the existing CLI uses A=test, B=reference) when each dataset has two or more
-scans. This preserves dependence within each scan and assumes independent scans.
+bootstrap intervals for diagnostic median amplitude and spectral RMS, plus
+paired performance decisions for flagging and oscillation. Aggregate flagging
+fractions are resampled by scan. Oscillation p95 is resampled by physical
+baseline after taking scan medians. The confidence level is 95% and a
+degradation Concern requires the lower GPU-minus-CMC1 bound to exceed zero.
 Per-spectrum measurement errors remain unavailable without spectral covariance;
 exact flag census and CASA operational checks retain their existing semantics.
 External notebook-generated diagnostic figures are embedded as supplied, without
