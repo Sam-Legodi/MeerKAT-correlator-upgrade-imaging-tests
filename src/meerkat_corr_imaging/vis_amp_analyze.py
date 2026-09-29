@@ -1125,10 +1125,11 @@ def analyze_single(
     if HAVE_DOCX:
         try:
             document = Document()
+            document.add_heading("Visibility-domain verification", level=1)
+            document.add_paragraph(f"Input MeasurementSet: {ms_path}")
             document.add_paragraph("Flagging fractions are exact counts for the selected data. "
                 "A performance decision requires a paired CMC1 reference observation. "
                 "The reference comparison uses independent whole-scan and physical-baseline bootstrap intervals at 95% confidence.")
-            document.add_heading("Visibility-domain verification", level=1)
             if field_name:
                 document.add_paragraph(f"Field: {field_name}")
             document.add_paragraph(
