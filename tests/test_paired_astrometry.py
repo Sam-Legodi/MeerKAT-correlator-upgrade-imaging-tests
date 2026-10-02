@@ -537,7 +537,7 @@ def test_experiment_mode_default_and_explicit_target_only(tmp_path):
 
 @pytest.mark.parametrize('mode,kinds', [
     ('automatic', ['target']), (None, ['target']),
-    ('target_only', ['gain_calibrator', 'target']), ('target_only', ['gain_calibrator']),
+    ('target_only', ['gain_calibrator']),
     ('target_only', ['target', 'target']), ('target_only', []),
     ('calibrator_and_target', ['target']), ('calibrator_and_target', ['gain_calibrator']),
 ])
@@ -620,6 +620,8 @@ def test_target_only_pipeline_never_accesses_calibrator_paths(tmp_path, monkeypa
     cfg['dry_run'] = True
     _, _, factory = fixture_tables(cfg) # no calibrator tables exist in the mock
     forbidden_paths = [str(tmp_path / (role+'_gain.ms')) for role in ('reference', 'test')]
+    cfg['fields'].insert(0, dict(name='gain', kind='gain_calibrator',
+        reference_ms=forbidden_paths[0], test_ms=forbidden_paths[1]))
     master = _dict_to_dataclass(dict(project_name='target', casa=dict(paired_astrometry=cfg)))
     # Legacy MS lists and inherited overrides must not enter the paired matrix.
     master.reference = Target(name='legacy-cal', ms_paths=[forbidden_paths[0]])
@@ -714,3 +716,32 @@ def test_target_only_samples_separate_filename_tags_from_field_names():
             assert '_J2147_SDPflags+cal.' in path and 'J2147-8132' not in path and 'PLACEHOLDER' in path
         assert master.extra['force_calibrate'] is False
         assert '_target_only' in cfg['output_dir']
+
+
+@pytest.mark.parametrize('ignored', [
+    dict(kind='gain_calibrator'),
+    dict(kind='gain_calibrator', name='gain', reference_ms='/missing/gain.ms', test_ms='/also-missing/gain.ms'),
+    dict(kind='gain_calibrator', name='', reference_ms=None, test_ms='', extra_metadata='ignored'),
+])
+def test_target_only_ignores_calibrator_entries_before_path_validation(tmp_path, monkeypatch, ignored):
+    cfg = target_only_config(tmp_path)
+    target = copy.deepcopy(cfg['fields'][0])
+    cfg['fields'].insert(0, ignored)
+    original = copy.deepcopy(cfg)
+    realpath = pa.os.path.realpath
+    allowed = {target['reference_ms'], target['test_ms']}
+    def guarded(path, *args, **kw):
+        assert str(path) in allowed, 'Ignored calibrator path was resolved'
+        return realpath(path, *args, **kw)
+    monkeypatch.setattr(pa.os.path, 'realpath', guarded)
+    normalized = pa.validate_config(cfg)
+    assert normalized['fields'] == [target]
+    assert pa.validate_config(normalized) == normalized
+    assert cfg == original # caller's original entries remain intact
+
+
+def test_default_mode_still_validates_calibrator_entries(tmp_path):
+    cfg = config(tmp_path)
+    cfg['fields'][0].pop('reference_ms')
+    with pytest.raises(ValueError, match='reference_ms'):
+        pa.validate_config(cfg)

@@ -79,6 +79,11 @@ def validate_config(raw):
     if cfg['enabled']:
         if not cfg['output_dir'] or not isinstance(cfg['fields'], list) or not cfg['fields']:
             raise ValueError('paired_astrometry needs output_dir and fields')
+        if cfg['experiment_mode'] == 'target_only':
+            # Ignore explicit gain-calibrator entries before checking their
+            # names/paths. They may reference missing or unusable exports.
+            cfg['fields'] = [field for field in cfg['fields']
+                             if not (isinstance(field, dict) and field.get('kind') == 'gain_calibrator')]
         kinds = []
         names = []
         for field in cfg['fields']:
@@ -94,10 +99,10 @@ def validate_config(raw):
         expected = ['target'] if cfg['experiment_mode'] == 'target_only' else ['gain_calibrator', 'target']
         if sorted(kinds) != expected or len(set(names)) != len(names):
             if cfg['experiment_mode'] == 'target_only':
-                raise ValueError('target_only requires exactly one target field; remove all gain_calibrator entries')
+                raise ValueError('target_only requires exactly one target field after ignoring gain_calibrator entries')
             raise ValueError('calibrator_and_target requires one distinct gain_calibrator and one target field; target-only runs require explicit experiment_mode: target_only')
-        # Check mode conflicts before resolving any MS paths, including rejected
-        # calibrator entries. Target-only never examines legacy/calibrator MSs.
+        # Only retained fields reach path resolution. Target-only never examines
+        # ignored or legacy calibrator MSs.
         for field in cfg['fields']:
             if os.path.realpath(field['reference_ms']) == os.path.realpath(field['test_ms']):
                 raise ValueError('Reference and test must be distinct MSs')

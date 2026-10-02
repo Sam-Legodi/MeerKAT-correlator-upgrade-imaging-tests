@@ -23,10 +23,13 @@ images to compare. Use `cal`, not `all` or `images`, for this imaging experiment
 
 Set `casa.paired_astrometry.experiment_mode: target_only` and provide exactly one
 `fields` entry with `kind: target`, its actual FIELD name, `reference_ms`, and
-`test_ms`. Remove gain-calibrator entries from this mapping. The default remains
+`test_ms`. Gain-calibrator entries may remain in this mapping: explicit
+`target_only` mode ignores them before validating or resolving their paths.
+Even missing paths or unusable calibrator exports are never accessed. The default remains
 `calibrator_and_target`, which requires one gain calibrator and one target.
-Unknown modes, duplicate/missing targets, or calibrator entries in target-only
-mode fail validation before MS path resolution. There is no automatic fallback
+Unknown modes and duplicate/missing targets fail validation before MS path
+resolution. Non-calibrator entries still require valid field definitions.
+There is no automatic fallback
 when a calibrator has no usable channels. Legacy `reference.ms_paths` / test MS
 lists are unused in either paired mode.
 
