@@ -16,6 +16,10 @@ Outputs (per MS):
 How to run (CASA 5/6):
   `casa --nologger --log2term -c tclean_two_bands.py [--scans=1,2,5] <ms1> <ms2> …`
   or set `MSFILE` in the script to image a single dataset without CLI args.
+
+CASA 6 paired astrometry is opt-in via --pair-config (resolved JSON) or the
+pipeline's MCI_PAIRED_ASTROMETRY_JSON environment. See docs/paired_astrometry.md.
+It preserves this legacy driver when no pair configuration is supplied.
 """
 
 import os
@@ -815,6 +819,7 @@ def _parse_scan_list(scans):
 def parse_driver_args(argv):
     parser = argparse.ArgumentParser(description="Run CASA tclean on one or more MeasurementSets.")
     parser.add_argument("--scans", default="", help="Comma-separated scan IDs for per-scan full-band imaging.")
+    parser.add_argument("--pair-config", default="", help="CASA 6 paired astrometry JSON config (pipeline supplies resolved JSON).")
     parser.add_argument("ms_paths", nargs="*", help="MeasurementSet paths to image.")
     return parser.parse_args(argv)
 
@@ -856,6 +861,22 @@ def main(argv):
     excluded = json.loads(os.environ.get("MCI_TCLEAN_EXCLUDE_FIELDS", "[]"))
     configured_field = FIELDNAME
     args = parse_driver_args(argv)
+    paired_json = os.environ.get("MCI_PAIRED_ASTROMETRY_JSON")
+    if args.pair_config or paired_json:
+        if args.ms_paths or args.scans:
+            raise ValueError("Paired mode discovers scans and MS paths from its config; do not pass positional MSs or --scans")
+        paired_config = json.loads(paired_json) if paired_json else None
+        if args.pair_config:
+            with open(args.pair_config) as handle:
+                paired_config = json.load(handle)
+        # Explicit helper path also works when CASA execfile omits __file__ or
+        # runs outside an installed Python package. Legacy CASA 5 stays untouched.
+        namespace = {"__name__": "mci_paired_astrometry"}
+        helper = _casa_helper_path("paired_astrometry.py")
+        with open(helper, "rb") as handle:
+            exec(compile(handle.read(), helper, "exec"), namespace)
+        namespace["run"](paired_config, qa=qa_fits)
+        return
     targets = resolve_ms_list(args.ms_paths)
     requested_scan_ids = _parse_scan_list(args.scans)
     targets = [os.path.abspath(os.path.expanduser(ms)) for ms in targets]

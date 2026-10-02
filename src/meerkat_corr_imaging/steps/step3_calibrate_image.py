@@ -51,6 +51,37 @@ def run(cfg: Config):
     tclean_env["MCI_TCLEAN_LOWBAND_HZ"] = ",".join(str(v) for v in lowband_hz)
     tclean_env["MCI_TCLEAN_HIGHBAND_HZ"] = ",".join(str(v) for v in highband_hz)
 
+    # A pair must be planned in one CASA process. Explicit opt-in leaves legacy
+    # per-MS calibration/imaging, names and downstream handoffs unchanged.
+    tclean_env.pop("MCI_PAIRED_ASTROMETRY_JSON", None)
+    if cfg.casa.paired_astrometry.get("enabled", False):
+        if not cfg.casa.imaging_enabled:
+            record_skip("Paired astrometry imaging disabled")
+            return
+        if cfg.extra.get("force_calibrate", False):
+            raise ValueError("Paired astrometry accepts already SDP-corrected MSs; force_calibrate must be false")
+        if (cfg.casa.scans or cfg.casa.exclude_fields or cfg.casa.imaging_exclude_fields):
+            raise ValueError("Paired astrometry uses explicit fields and discovered scans; remove legacy scans/exclusions")
+        from ..paired_astrometry import validate_config
+        pair = validate_config(cfg.casa.paired_astrometry)
+        inputs = []
+        for field in pair["fields"]:
+            for role in ("reference", "test"):
+                path = str(Path(field[role + "_ms"]).expanduser().resolve())
+                field[role + "_ms"] = path
+                inputs.append(path)
+        inputs = list(dict.fromkeys(inputs))
+        register_inputs(inputs)
+        missing = [ms for ms in inputs if not Path(ms).is_dir()]
+        if missing:
+            raise FileNotFoundError("Configured paired MeasurementSet directories not found: " + ", ".join(missing))
+        pair["output_dir"] = str(Path(pair["output_dir"]).expanduser().resolve())
+        tclean_env.pop("MCI_TCLEAN_MSFILE", None)
+        tclean_env["MCI_PAIRED_ASTROMETRY_JSON"] = json.dumps(pair, allow_nan=False)
+        _run_cmd([casa_bin, "--nologger", "--log2term", "--nogui", "-c",
+                  str(package_dir / "casa_image_batch.py")], env=tclean_env, inputs=inputs)
+        return
+
     all_ms = list(cfg.reference.ms_paths)
     for t in cfg.tests:
         all_ms += t.ms_paths

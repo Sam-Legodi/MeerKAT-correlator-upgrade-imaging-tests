@@ -952,3 +952,14 @@ metric-to-source map and limitations. Catalogue resampling conditions on matchin
 quality cuts and inlier selection; it cannot correct association mistakes,
 selection truncation or common calibration systematics. Input catalogues currently
 contain no cross-source or cross-dataset covariance.
+
+### Paired CMC1–GPU/CMC2 astrometry imaging (CASA 6)
+
+An opt-in, flag/weight-based frequency selection mode images each gain-calibrator
+and target scan plus reference-defined low/centred-middle/high all-scan bands.
+It supports separate field MSs, whole-channel paired interval overlap, native
+diagnostics, dry-run planning, and per-image provenance with stale-output checks.
+Existing configurations retain legacy imaging behaviour. See
+[paired astrometry instructions](docs/paired_astrometry.md) and the
+[L-band sample](configs/paired_astrometry/l_band.yaml) /
+[S4 sample](configs/paired_astrometry/s4.yaml).

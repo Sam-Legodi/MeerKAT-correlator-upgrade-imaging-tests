@@ -1,0 +1,63 @@
+project_name: CMC1_GPU_S4_astrometry
+# Replace ALL PLACEHOLDER values before a remote run. These are not local paths.
+path_vars:
+  remote_root: "/home/slegodi/corr_upgrade_tests/2026"
+  data_root: "${remote_root}/data"
+  analysis_root: "${remote_root}/consolidated_reports/visibility_analysis/S4_SDPflags+cal"
+  ref_cbid: "PLACEHOLDER_CMC1_CBID"
+  test_cbid: "PLACEHOLDER_GPU_CBID"
+  refmode: "PLACEHOLDER_CMC1_S4_MODE"
+  testmode: "PLACEHOLDER_GPU_S4_MODE"
+  field: "J2147-8132"
+  gain_field: "J1619-8418"
+  ref_stem: "${ref_cbid}_${field}_SDPflags+cal.${refmode}"
+  test_stem: "${test_cbid}_${field}_SDPflags+cal.${testmode}"
+  ref_gain_stem: "${ref_cbid}_${gain_field}_SDPflags+cal.${refmode}"
+  test_gain_stem: "${test_cbid}_${gain_field}_SDPflags+cal.${testmode}"
+  run_root: "${analysis_root}/paired_astrometry/${ref_cbid}_vs_${test_cbid}"
+paths:
+  raw_dir: "${run_root}/raw"
+  interim_dir: "${run_root}/interim"
+  processed_dir: "${run_root}/processed"
+  reports_dir: "${run_root}/reports"
+  sky_xmatches_dir: "${run_root}/processed/Sky-CrossMatches"
+# Legacy inputs are unused in this opt-in mode. Previously configured reference
+# and tests continue to work normally when paired_astrometry is absent/disabled.
+reference: {name: CMC1, ms_paths: [], images: []}
+tests: [{name: GPU_CMC2, ms_paths: [], images: []}]
+casa:
+  imaging_enabled: true
+  timeout_seconds: 86400
+  paired_astrometry:
+    enabled: true
+    dry_run: false # set true for a read-only MS survey/selection plan, no tclean
+    output_dir: "${run_root}"
+    datacolumn: data # SDP-corrected values are already in DATA
+    occupancy_threshold: 0.8
+    min_common_coverage: 0.9
+    min_channel_overlap: 0.9
+    chunk_rows: 128
+    max_chunk_bytes: 67108864
+    fields:
+      - name: "${gain_field}"
+        kind: gain_calibrator
+        reference_ms: "${data_root}/${ref_gain_stem}.ms" # PLACEHOLDER layout
+        test_ms: "${data_root}/${test_gain_stem}.ms" # PLACEHOLDER layout
+      - name: "${field}"
+        kind: target
+        reference_ms: "${data_root}/${ref_stem}.ms" # PLACEHOLDER layout
+        test_ms: "${data_root}/${test_stem}.ms" # PLACEHOLDER layout
+    tclean:
+      cell: 0.6arcsec
+      imsize: 4096
+      niter: 10000
+      threshold: 1uJy
+      deconvolver: clark
+      gridder: wproject
+      wprojplanes: 64
+      weighting: briggs
+      robust: 0.0
+      pblimit: -1.0
+      # Optional fixed beam, e.g. restoringbeam: [8arcsec, 8arcsec, 0deg]
+extra:
+  force_calibrate: false

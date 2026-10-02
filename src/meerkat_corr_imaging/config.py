@@ -40,6 +40,7 @@ class CasaCfg:
     scans: str = ""
     lowband_hz: Optional[List[float]] = None
     highband_hz: Optional[List[float]] = None
+    paired_astrometry: Dict[str, Any] = field(default_factory=dict)
     field: str = "J2147-8132"
     datacolumn: str = "DATA"
     image_scans: bool = True
@@ -287,7 +288,11 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         field=casa_raw.get("field", "J2147-8132"),
         datacolumn=casa_raw.get("datacolumn", "DATA"),
         image_scans=casa_raw.get("image_scans", True),
+        paired_astrometry=dict(casa_raw.get("paired_astrometry") or {}),
     )
+    if casa.paired_astrometry:
+        from .paired_astrometry import validate_config
+        casa.paired_astrometry = validate_config(casa.paired_astrometry)
     low_high_slice = LowHighSliceCfg(
         enabled=low_high_enabled,
         overwrite=low_high_raw.get("overwrite", False),
