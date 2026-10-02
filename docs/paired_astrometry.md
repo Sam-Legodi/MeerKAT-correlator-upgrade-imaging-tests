@@ -211,15 +211,29 @@ frequency frames fail rather than silently comparing LSRK and TOPO values.
 No Doppler/frame transformation is performed; TOPO values at different epochs
 are compared numerically in their stored frame.
 
-Iteratively remove channels in either MS with less than
-`min_channel_overlap` (default 0.9) of their own interval covered by the other's
-retained union, until stable. This excludes non-overlapping channels and protects
-flag gaps. Require common intersection bandwidth to cover at least
+Apply `min_channel_overlap` (default 0.9) once against the **original opposite
+support**: reference channels against all originally eligible test channels,
+and test channels against the original requested reference band. Then remove
+any survivors with zero overlap against the other retained union. Never
+reapply the fractional threshold to successively trimmed boundaries: on offset
+4k/8k grids that can erase an otherwise almost completely shared band.
+
+Finally require the actual retained common intersection bandwidth to cover at least
 `min_common_coverage` (default 0.9) of **each retained MS union and the original
 requested reference band**. Fail clearly if any band or full-band selection
 fails, before any imaging. This prevents retaining a tiny accidental intersection
 and claiming adequate coverage. Test native quartiles are diagnostics, not the
 paired band definition. Relaxing these thresholds changes the experiment contract.
+
+The admission threshold refers to original support, not the final common fraction
+of each individual channel. Whole boundary channels can have a lower final common
+fraction after the opposite boundary is trimmed; both image bands must still meet
+the final 90% coverage contract, including the original requested reference band.
+Record per-channel final fractions as `reference_channel_common_fractions` and
+`test_channel_common_fractions`, alongside unmatched intervals and effective
+frequencies. Interior flag gaps remain absent from the common interval union.
+Selection algorithm version 2 and the changed rule are part of the image contract,
+so outputs made under the earlier iterative rule cannot silently be reused.
 
 Keep whole channels. No clipping, interpolation, or common-grid resampling is
 performed. Identical interval unions have exact frequency support even when the

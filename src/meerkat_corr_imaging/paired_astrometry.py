@@ -480,7 +480,7 @@ def bandwidth(ranges):
     return sum(hi-lo for lo, hi in ranges)
 
 
-def overlap_filter(channels, support, limit):
+def channel_overlap_fractions(channels, support):
     """O(N log M) interval coverage; never scan a 32k-channel grid per channel."""
     ranges = union(support)
     starts = [r[0] for r in ranges]
@@ -494,8 +494,13 @@ def overlap_filter(channels, support, limit):
             return 0.0
         return prefix[i] + min(value-ranges[i][0], ranges[i][1]-ranges[i][0])
 
-    return [c for c in channels if
-            (area(c['interval_hz'][1])-area(c['interval_hz'][0])) / c['width_hz'] + 1e-12 >= limit]
+    return [max(0.0, min(1.0, (area(c['interval_hz'][1])-area(c['interval_hz'][0])) / c['width_hz']))
+            for c in channels]
+
+
+def overlap_filter(channels, support, limit):
+    return [c for c, fraction in zip(channels, channel_overlap_fractions(channels, support))
+            if fraction > 0 and fraction + 1e-12 >= limit]
 
 
 def difference(a, b):
@@ -523,10 +528,11 @@ def channel_key(c):
 
 
 def common_selection(reference, test, cfg):
-    """Reference-defined band; symmetric whole-channel overlap fixed point.
+    """Reference-defined band; whole-channel admission against original support.
 
     Remove channels with < min_channel_overlap of their own width supported by
-    the other MS. Then require common union bandwidth >= min_common_coverage of
+    the original opposite eligible support, once. Prune zero-overlap survivors.
+    Then require common union bandwidth >= min_common_coverage of
     original reference band AND each retained MS support. Never clip channels.
     """
     if not reference or not test:
@@ -535,17 +541,21 @@ def common_selection(reference, test, cfg):
     if len(frames) != 1:
         raise ValueError('Frequency frames differ; transform to a documented common frame before comparison: ' + str(sorted(frames)))
     initial = intervals(reference)
-    ref, other = list(reference), list(test)
     limit = cfg['min_channel_overlap']
-    while True:
-        a, b = intervals(ref), intervals(other)
-        new_ref = overlap_filter(ref, b, limit)
-        new_other = overlap_filter(other, a, limit)
-        if len(new_ref) == len(ref) and len(new_other) == len(other):
-            break
-        ref, other = new_ref, new_other
-        if not ref or not other:
-            raise ValueError('Inadequate common frequency overlap after whole-channel overlap filtering')
+    # Re-testing the fractional threshold after every boundary removal erodes
+    # offset/coarse-fine grids to empty despite near-total shared bandwidth.
+    # Admit channels against the immutable opposite inputs, then enforce the
+    # actual retained band coverage. Never treat deliberate boundary trimming
+    # as newly flagged/missing input data in another admission pass.
+    ref = overlap_filter(reference, intervals(test), limit)
+    other = overlap_filter(test, initial, limit)
+    a, b = intervals(ref), intervals(other)
+    # Only strictly positive mutual overlap survives. Removing zero-overlap
+    # channels cannot remove any common support, so no iterative cascade occurs.
+    ref = overlap_filter(ref, b, 0.0)
+    other = overlap_filter(other, a, 0.0)
+    if not ref or not other:
+        raise ValueError('Inadequate common frequency overlap after whole-channel overlap filtering')
     a, b = intervals(ref), intervals(other)
     common = intersection(a, b)
     common_bw = bandwidth(common)
@@ -553,7 +563,9 @@ def common_selection(reference, test, cfg):
                      reference=common_bw/bandwidth(a), test=common_bw/bandwidth(b))
     if min(coverages.values()) + 1e-12 < cfg['min_common_coverage']:
         raise ValueError('Inadequate common frequency coverage: {} (required {})'.format(coverages, cfg['min_common_coverage']))
-    detail = dict(rule='whole native channels; symmetric interval-overlap fixed point; no regridding',
+    detail = dict(rule='whole native channels; one-pass admission against original opposite support; zero-overlap pruning; final band coverage; no regridding',
+        selection_algorithm_version=2,
+        channel_admission_support='reference channels versus original eligible test union; test channels versus original requested reference band',
         min_channel_overlap=limit, min_common_coverage=cfg['min_common_coverage'],
         frequency_frame=next(iter(frames)), common_intervals_hz=common,
         requested_reference_intervals_hz=initial, coverage_fractions=coverages,
@@ -563,6 +575,10 @@ def common_selection(reference, test, cfg):
         unmatched_reference_edges_hz=difference(a, b), unmatched_test_edges_hz=difference(b, a),
         excluded_reference_intervals_hz=difference(initial, a),
         excluded_test_intervals_hz=difference(intervals(test), b),
+        reference_channel_common_fractions=[dict(spw=c['spw'], channel=c['channel'], fraction=f)
+            for c, f in zip(ref, channel_overlap_fractions(ref, common))],
+        test_channel_common_fractions=[dict(spw=c['spw'], channel=c['channel'], fraction=f)
+            for c, f in zip(other, channel_overlap_fractions(other, common))],
         exact_frequency_support=(a == b), common_bandwidth_hz=common_bw)
     return ref, other, detail
 

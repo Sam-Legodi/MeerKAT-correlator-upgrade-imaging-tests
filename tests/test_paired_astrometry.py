@@ -745,3 +745,51 @@ def test_default_mode_still_validates_calibrator_entries(tmp_path):
     cfg['fields'][0].pop('reference_ms')
     with pytest.raises(ValueError, match='reference_ms'):
         pa.validate_config(cfg)
+
+
+@pytest.mark.parametrize('band', ['low', 'middle', 'high', 'fullband'])
+def test_offset_s4_two_to_one_grid_does_not_erode_to_empty(band):
+    # Reconstruct continuous native grids from the user's remote diagnostics.
+    reference = [channel(i, 2683853149.4140625+(i+.5)*854492.1875, width=854492.1875)
+                 for i in range(891)]
+    test = [channel(i, 2683052062.9882812+(i+.5)*427246.09375, width=427246.09375)
+            for i in range(1786)]
+    requested = reference if band == 'fullband' else pa.quartiles(reference)[band]
+    ref, other, detail = pa.common_selection(requested, test, pa.validate_config({}))
+    assert ref and other
+    assert min(detail['coverage_fractions'].values()) >= .9
+    assert detail['coverage_fractions']['requested_reference'] > .99
+    assert detail['unmatched_reference_edges_hz'] or detail['unmatched_test_edges_hz']
+
+
+def test_offset_grid_flag_gaps_and_inadequate_coverage_remain_enforced():
+    reference = [channel(i, 2683853149.4140625+(i+.5)*854492.1875, width=854492.1875)
+                 for i in range(222)]
+    test = [channel(i, 2683052062.9882812+(i+.5)*427246.09375, width=427246.09375)
+            for i in range(450)]
+    missing = {40, 41}
+    usable = [c for c in test if c['channel'] not in missing]
+    ref, other, detail = pa.common_selection(reference, usable, pa.validate_config({}))
+    assert min(detail['coverage_fractions'].values()) >= .9
+    assert not missing.intersection(c['channel'] for c in other)
+    hole = pa.intervals([c for c in test if c['channel'] in missing])
+    assert pa.intersection(detail['common_intervals_hz'], hole) == []
+    assert detail['selection_algorithm_version'] == 2
+    assert all(d['fraction'] > 0 for d in detail['reference_channel_common_fractions'])
+    assert all(d['fraction'] > 0 for d in detail['test_channel_common_fractions'])
+    # Significant genuine missing support still fails the original-reference
+    # band coverage requirement, rather than retaining a tiny intersection.
+    with pytest.raises(ValueError, match='coverage'):
+        pa.common_selection(reference, [c for c in test if not 40 <= c['channel'] < 180], pa.validate_config({}))
+
+
+def test_one_pass_prunes_zero_overlap_survivors_and_reports_final_fractions():
+    cfg = pa.validate_config(dict(min_common_coverage=.4))
+    ref, other, detail = pa.common_selection(
+        [channel(0, .5), channel(1, 10.5)],
+        [channel(0, 1, width=2), channel(1, 10.5)], cfg)
+    assert [c['channel'] for c in ref] == [1]
+    assert [c['channel'] for c in other] == [1]
+    assert detail['coverage_fractions']['requested_reference'] == .5
+    assert all(d['fraction'] == 1 for d in detail['reference_channel_common_fractions'])
+    assert pa.overlap_filter([channel(0, .5)], [[1, 2]], 0) == [] # touching endpoints
