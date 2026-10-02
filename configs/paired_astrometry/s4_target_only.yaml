@@ -24,6 +24,7 @@ paths:
 reference: {name: CMC1, ms_paths: [], images: []}
 tests: [{name: GPU_CMC2, ms_paths: [], images: []}]
 casa:
+  executable: "/opt/casa-6.6.5-31-py3.10.el8/bin/casa" # bruce; change for other servers
   imaging_enabled: true
   timeout_seconds: 86400
   paired_astrometry:

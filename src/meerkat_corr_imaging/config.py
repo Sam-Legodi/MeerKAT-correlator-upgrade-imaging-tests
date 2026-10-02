@@ -44,6 +44,7 @@ class CasaCfg:
     field: str = "J2147-8132"
     datacolumn: str = "DATA"
     image_scans: bool = True
+    executable: str = "casa"
 
 @dataclass
 class LowHighSliceCfg:
@@ -248,6 +249,9 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         "pybdsf","xmatch","extra"}}
     merged_extra = {**(d.get("extra") or {}), **top_level_extra}
     casa_raw = dict(d.get("casa") or {})
+    executable = casa_raw.get("executable", "casa")
+    if not isinstance(executable, str) or not executable.strip():
+        raise ValueError("casa.executable must be a nonempty executable path or command")
     low_high_raw = d.get("low_high_slice") or {}
     low_high_enabled = low_high_raw.get("enabled", False)
     frequency_ranges = _shared_frequency_ranges(d, casa_raw, low_high_raw)
@@ -266,6 +270,7 @@ def _dict_to_dataclass(d: Dict[str, Any]) -> Config:
         if not math.isfinite(value) or value <= 0 or (key == "quality_min_solution_fraction" and value > 1):
             raise ValueError("Invalid casa." + key)
     casa = CasaCfg(
+        executable=executable.strip(),
         quality_check=casa_raw.get("quality_check", False),
         quality_min_solution_fraction=float(casa_raw.get("quality_min_solution_fraction", 0.95)),
         quality_max_residual=float(casa_raw.get("quality_max_residual", 0.1)),

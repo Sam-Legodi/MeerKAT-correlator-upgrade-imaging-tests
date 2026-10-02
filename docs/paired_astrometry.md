@@ -44,21 +44,24 @@ name; the independent `target_file_tag: J2147` builds filenames such as
 and a separate `_target_only` output directory. Do not change existing MS data,
 weights or flags to make eligibility pass.
 
-From the repository root inside tmux/screen, use the CASA 6.6.5 executable found
-on bruce. The new samples default to `dry_run: true`, so this exact command
+The samples set `casa.executable: /opt/casa-6.6.5-31-py3.10.el8/bin/casa`
+for bruce. Change this YAML setting for other servers; no shell export is needed.
+An existing `$CASA` environment variable takes precedence, so `unset CASA` once
+if it points to an old installation. Configs without `executable` retain the
+legacy `casa` command on PATH.
+
+From the repository root inside tmux/screen, run the configured executable. The new samples default to `dry_run: true`, so this exact command
 performs the selection-only survey and writes the planned target image matrix:
 
 ```bash
-CASA=/opt/casa-6.6.5-31-py3.10.el8/bin/casa \
-  meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
+meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
 ```
 
 After inspecting the plan, set `casa.paired_astrometry.dry_run: false` in that
 same config. The exact imaging command is:
 
 ```bash
-CASA=/opt/casa-6.6.5-31-py3.10.el8/bin/casa \
-  meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
+meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
 ```
 
 For S4 use `configs/paired_astrometry/s4_target_only.yaml` in both commands.
@@ -97,7 +100,7 @@ selection: flags and weights in the MS do.
 From the repository root, inside a tmux/screen session, run:
 
 ```bash
-CASA=/path/to/casa-6/bin/casa PYTHONPATH="$PWD/src" \
+PYTHONPATH="$PWD/src" \
   python -m meerkat_corr_imaging.cli cal --config configs/paired_astrometry/l_band.yaml
 ```
 

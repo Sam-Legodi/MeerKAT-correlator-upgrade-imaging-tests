@@ -33,7 +33,7 @@ def run(cfg: Config):
       - packaged standalone_xxyy_solve.py (rarely needed; force_calibrate)
       - packaged tclean_two_bands.py for each MS in reference+tests
     """
-    casa_bin = os.environ.get("CASA", "casa")  # allow override via CASA env var
+    casa_bin = os.path.expanduser(os.environ.get("CASA") or cfg.casa.executable)
     package_dir = Path(__file__).resolve().parents[1]
     tclean_script = package_dir / "tclean_two_bands.py"
     solve_script = package_dir / "standalone_xxyy_solve.py"
