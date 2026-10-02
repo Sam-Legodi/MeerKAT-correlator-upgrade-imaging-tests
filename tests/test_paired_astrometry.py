@@ -447,13 +447,14 @@ def test_selection_failure_preserves_all_native_diagnostics(tmp_path, monkeypatc
     assert not Path(cfg['output_dir'], 'images').exists()
 
 
-def test_compatibility_entrypoint_dispatches_paired_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize('target_only', [False, True])
+def test_compatibility_entrypoint_dispatches_paired_config(tmp_path, monkeypatch, target_only):
     import os
     import sys
     import meerkat_corr_imaging
     package = Path(meerkat_corr_imaging.__file__).parent
     script = package.parent.parent/'scripts/tclean_two_bands.py'
-    cfg = config(tmp_path)
+    cfg = target_only_config(tmp_path) if target_only else config(tmp_path)
     cfg['dry_run'] = True
     _, _, factory = fixture_tables(cfg)
     from types import SimpleNamespace
@@ -464,7 +465,7 @@ def test_compatibility_entrypoint_dispatches_paired_config(tmp_path, monkeypatch
     monkeypatch.setenv('MCI_TCLEAN_MSFILE', 'ignored_legacy.ms')
     monkeypatch.setattr(sys, 'argv', [str(script)])
     exec(compile(script.read_text(), str(script), 'exec'), {'__name__': '__main__', '__file__': str(script)})
-    assert len(json.loads(Path(cfg['output_dir'], 'selection_plan.json').read_text())['images']) == 20
+    assert len(json.loads(Path(cfg['output_dir'], 'selection_plan.json').read_text())['images']) == (10 if target_only else 20)
 
 
 def test_interval_operations_randomized_against_unit_grid():
@@ -511,3 +512,205 @@ def test_external_mask_content_changes_fingerprint(tmp_path):
     mask.write_text('region two')
     second = pa.build_plan(cfg, factory, task, '6.6.1')
     assert first['images'][0]['fingerprint'] != second['images'][0]['fingerprint']
+
+
+def target_only_config(tmp_path):
+    cfg = config(tmp_path)
+    cfg['experiment_mode'] = 'target_only'
+    cfg['fields'] = [f for f in cfg['fields'] if f['kind'] == 'target']
+    return pa.validate_config(cfg)
+
+
+def test_experiment_mode_default_and_explicit_target_only(tmp_path):
+    cfg = config(tmp_path)
+    assert cfg['experiment_mode'] == 'calibrator_and_target'
+    raw = copy.deepcopy(cfg); raw.pop('experiment_mode')
+    assert pa.validate_config(raw)['experiment_mode'] == 'calibrator_and_target'
+    raw['fields'] = [raw['fields'][1]]
+    with pytest.raises(ValueError, match='explicit experiment_mode'):
+        pa.validate_config(raw)
+    raw['experiment_mode'] = 'target_only'
+    assert pa.validate_config(raw)['fields'][0]['kind'] == 'target'
+    loaded = _dict_to_dataclass(dict(project_name='target', casa=dict(paired_astrometry=raw)))
+    assert loaded.casa.paired_astrometry['experiment_mode'] == 'target_only'
+
+
+@pytest.mark.parametrize('mode,kinds', [
+    ('automatic', ['target']), (None, ['target']),
+    ('target_only', ['gain_calibrator', 'target']), ('target_only', ['gain_calibrator']),
+    ('target_only', ['target', 'target']), ('target_only', []),
+    ('calibrator_and_target', ['target']), ('calibrator_and_target', ['gain_calibrator']),
+])
+def test_reject_conflicting_experiment_modes(tmp_path, mode, kinds, monkeypatch):
+    cfg = config(tmp_path)
+    originals = {f['kind']: f for f in cfg['fields']}
+    cfg['experiment_mode'] = mode
+    cfg['fields'] = [copy.deepcopy(originals[kind]) for kind in kinds]
+    # Invalid mode/field combinations are rejected before resolving MS paths.
+    monkeypatch.setattr(pa.os.path, 'realpath', lambda *args, **kw: pytest.fail('Conflicting config accessed an MS path'))
+    with pytest.raises(ValueError):
+        pa.validate_config(cfg)
+
+
+def test_target_only_requires_both_paths_and_keeps_weight_policy(tmp_path):
+    cfg = target_only_config(tmp_path)
+    invalid = copy.deepcopy(cfg); invalid['fields'][0].pop('reference_ms')
+    with pytest.raises(ValueError, match='reference_ms'):
+        pa.validate_config(invalid)
+    db, _, factory = fixture_tables(cfg)
+    path = cfg['fields'][0]['reference_ms']
+    for row in db[path]:
+        row['WEIGHT'][:] = 0
+        row['WEIGHT_SPECTRUM'][:] = 0
+    with pytest.raises(pa.SelectionPlanningError, match='fewer than four'):
+        pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    # Even with positive WEIGHT, a defined zero spectrum is still unusable.
+    for row in db[path]:
+        row['WEIGHT'][:] = 1
+    with pytest.raises(pa.SelectionPlanningError, match='fewer than four'):
+        pa.build_plan(cfg, factory, mock_task, '6.6.5')
+
+
+def test_target_only_matrix_frequency_coverage_and_provenance(tmp_path):
+    cfg = target_only_config(tmp_path)
+    db, _, factory = fixture_tables(cfg)
+    # Preserve a real irregular gap in both roles, without filling it in.
+    for field in cfg['fields']:
+        for role in ('reference', 'test'):
+            for row in db[field[role+'_ms']]:
+                row['FLAG'][:, 7] = True
+    # Different scan count and IDs in test: remove its second scan.
+    path = cfg['fields'][0]['test_ms']
+    db[path] = [r for r in db[path] if r['SCAN_NUMBER'] != 18]
+    plan = pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    assert len(plan['images']) == 6+2+1
+    assert len(plan['native_diagnostics']) == 2
+    assert plan['experiment_mode'] == 'target_only'
+    assert plan['calibrator_imaging_qa_status'] == 'not_performed_target_only'
+    assert cfg['occupancy_threshold'] == .8 and cfg['min_common_coverage'] == .9
+    assert 'phase transfer' in plan['interpretation_limitations']
+    for p in plan['images']:
+        c = p['contract']
+        assert c['field_kind'] == 'target'
+        assert c['experiment_mode'] == 'target_only'
+        assert c['calibrator_imaging_qa_status'] == 'not_performed_target_only'
+        assert 'calibrator-image check' in c['interpretation_limitations']
+        assert c['data_column'] == 'DATA'
+        assert c['tclean_parameters']['stokes'] == 'I' and c['tclean_parameters']['specmode'] == 'mfs'
+        assert c['common_frequency_selection']['coverage_fractions'] == dict(requested_reference=1, reference=1, test=1)
+        assert [0, 7] not in c['selection']['contributed_channel_ids']
+        if c['product'] == 'fullband':
+            assert c['scan_ids'][0] in ([2, 8] if c['ms_role'] == 'reference' else [12])
+            assert 'independent scans' in c['actual_support_comparability']
+        else:
+            assert c['scan_ids'] == ([2, 8] if c['ms_role'] == 'reference' else [12])
+    for role in ('reference', 'test'):
+        assert {p['contract']['product'] for p in plan['images'] if p['contract']['ms_role'] == role} == {'low', 'middle', 'high', 'fullband'}
+    # Keep the same quartile helper and integer rounding as combined mode.
+    native = pa.quartiles([c for c in plan['native_diagnostics'][0]['channels'] if c['eligible']])
+    for band in ('low', 'middle', 'high'):
+        c = next(p['contract'] for p in plan['images'] if p['contract']['ms_role'] == 'reference' and p['contract']['product'] == band)
+        assert c['common_frequency_selection']['reference_channel_ids'] == [list(pa.channel_key(ch)) for ch in native[band]]
+
+
+def test_target_only_pipeline_never_accesses_calibrator_paths(tmp_path, monkeypatch):
+    import builtins
+    from meerkat_corr_imaging.config import Target
+    cfg = target_only_config(tmp_path)
+    cfg['dry_run'] = True
+    _, _, factory = fixture_tables(cfg) # no calibrator tables exist in the mock
+    forbidden_paths = [str(tmp_path / (role+'_gain.ms')) for role in ('reference', 'test')]
+    master = _dict_to_dataclass(dict(project_name='target', casa=dict(paired_astrometry=cfg)))
+    # Legacy MS lists and inherited overrides must not enter the paired matrix.
+    master.reference = Target(name='legacy-cal', ms_paths=[forbidden_paths[0]])
+    master.tests = [Target(name='legacy-test-cal', ms_paths=[forbidden_paths[1]])]
+    monkeypatch.setenv('MCI_TCLEAN_MSFILE', forbidden_paths[0])
+    accessed = []
+    def guard(path):
+        path = str(path)
+        assert not any(path == p or path.startswith(p + '/') for p in forbidden_paths), path
+        accessed.append(path)
+    original_open, original_stat, original_realpath = builtins.open, pa.os.stat, pa.os.path.realpath
+    def checked_open(path, *args, **kw):
+        guard(path); return original_open(path, *args, **kw)
+    def checked_stat(path, *args, **kw):
+        guard(path); return original_stat(path, *args, **kw)
+    def checked_realpath(path, *args, **kw):
+        guard(path); return original_realpath(path, *args, **kw)
+    monkeypatch.setattr(builtins, 'open', checked_open)
+    monkeypatch.setattr(pa.os, 'stat', checked_stat)
+    monkeypatch.setattr(pa.os.path, 'realpath', checked_realpath)
+    def forbidden(**kw):
+        pytest.fail('Selection-only target run must not calibrate/image/export')
+    monkeypatch.setattr(step3_calibrate_image, 'run_calibration', forbidden)
+    calls = []
+    def launch(command, env=None, inputs=()):
+        calls.append(command)
+        assert len(inputs) == 2 and 'MCI_TCLEAN_MSFILE' not in env
+        pair = json.loads(env['MCI_PAIRED_ASTROMETRY_JSON'])
+        plan = pa.build_plan(pair, factory, mock_task, '6.6.5')
+        pa.execute_plan(plan, forbidden, forbidden)
+    monkeypatch.setattr(step3_calibrate_image, '_run_cmd', launch)
+    step3_calibrate_image.run(master)
+    assert len(calls) == 1
+    assert accessed and all('gain.ms' not in p for p in accessed)
+
+
+def test_default_mode_does_not_fall_back_when_calibrator_has_zero_weights(tmp_path):
+    cfg = config(tmp_path)
+    db, _, factory = fixture_tables(cfg)
+    for role in ('reference', 'test'):
+        for row in db[cfg['fields'][0][role+'_ms']]:
+            row['WEIGHT'][:] = 0; row['WEIGHT_SPECTRUM'][:] = 0
+    with pytest.raises(pa.SelectionPlanningError, match='Field gain') as error:
+        pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    assert len(error.value.diagnostics) == 4
+    assert all(d['experiment_mode'] == 'calibrator_and_target' for d in error.value.diagnostics)
+
+
+def test_mode_changes_reject_existing_target_outputs(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    _, _, factory = fixture_tables(cfg)
+    combined = pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    def task(**params):
+        Path(params['imagename']+'.image').mkdir()
+    def export(**params):
+        Path(params['fitsimage']).write_text('mock fits')
+    monkeypatch.setattr(pa, 'fits_metadata', lambda path: ({'ra_deg': 1}, {'major_arcsec': 8}))
+    pa.execute_plan(combined, task, export)
+    cfg['experiment_mode'] = 'target_only'; cfg['fields'] = [cfg['fields'][1]]
+    target = pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    with pytest.raises(RuntimeError, match='Stale'):
+        pa.execute_plan(target, lambda **kw: pytest.fail('stale output imaged'), export)
+    # Complete target-only manifests carry mode/omitted-QA information too.
+    cfg['output_dir'] = str(tmp_path/'target-output')
+    target = pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    pa.execute_plan(target, task, export)
+    for p in target['images']:
+        saved = json.loads(Path(p['contract']['output_paths']['manifest']).read_text())
+        assert saved['processing_status'] == 'complete'
+        assert saved['contract']['experiment_mode'] == 'target_only'
+        assert saved['contract']['calibrator_imaging_qa_status'] == 'not_performed_target_only'
+        assert saved['fits_wcs_centre'] and saved['restoring_beam']
+    cfg['experiment_mode'] = 'calibrator_and_target'; cfg['fields'] = combined['config']['fields']
+    reverse = pa.build_plan(cfg, factory, mock_task, '6.6.5')
+    p = next(p for p in reverse['images'] if p['contract']['field_kind'] == 'target')
+    with pytest.raises(RuntimeError, match='Stale'):
+        pa.output_state(p)
+
+
+def test_target_only_samples_separate_filename_tags_from_field_names():
+    import yaml
+    root = Path(__file__).resolve().parents[1]
+    for name in ('l_band_target_only.yaml', 's4_target_only.yaml'):
+        master = _dict_to_dataclass(yaml.safe_load((root/'configs/paired_astrometry'/name).read_text()))
+        cfg = master.casa.paired_astrometry
+        assert cfg['experiment_mode'] == 'target_only' and cfg['dry_run']
+        assert cfg['datacolumn'] == 'data' and len(cfg['fields']) == 1
+        field = cfg['fields'][0]
+        assert field['name'] == 'J2147-8132' and field['kind'] == 'target'
+        for role in ('reference', 'test'):
+            path = field[role+'_ms']
+            assert '_J2147_SDPflags+cal.' in path and 'J2147-8132' not in path and 'PLACEHOLDER' in path
+        assert master.extra['force_calibrate'] is False
+        assert '_target_only' in cfg['output_dir']

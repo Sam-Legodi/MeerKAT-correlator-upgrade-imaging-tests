@@ -1,22 +1,18 @@
-project_name: CMC1_GPU_S4_astrometry
+project_name: CMC1_GPU_L_target_only_astrometry
 # Replace ALL PLACEHOLDER values before a remote run. These are not local paths.
 path_vars:
   remote_root: "/home/slegodi/corr_upgrade_tests/2026"
   data_root: "${remote_root}/data"
-  analysis_root: "${remote_root}/consolidated_reports/visibility_analysis/S4_SDPflags+cal"
+  analysis_root: "${remote_root}/consolidated_reports/visibility_analysis/L_SDPflags+cal"
   ref_cbid: "PLACEHOLDER_CMC1_CBID"
   test_cbid: "PLACEHOLDER_GPU_CBID"
-  refmode: "PLACEHOLDER_CMC1_S4_MODE"
-  testmode: "PLACEHOLDER_GPU_S4_MODE"
+  refmode: "PLACEHOLDER_CMC1_L_MODE"
+  testmode: "PLACEHOLDER_GPU_L_MODE"
   field: "J2147-8132"
-  gain_field: "J1619-8418"
-  target_file_tag: "J2147"
-  gain_file_tag: "J1619"
+  target_file_tag: "J2147" # filename tag, independent of the actual FIELD name
   ref_stem: "${ref_cbid}_${target_file_tag}_SDPflags+cal.${refmode}"
   test_stem: "${test_cbid}_${target_file_tag}_SDPflags+cal.${testmode}"
-  ref_gain_stem: "${ref_cbid}_${gain_file_tag}_SDPflags+cal.${refmode}"
-  test_gain_stem: "${test_cbid}_${gain_file_tag}_SDPflags+cal.${testmode}"
-  run_root: "${analysis_root}/paired_astrometry/${ref_cbid}_vs_${test_cbid}"
+  run_root: "${analysis_root}/paired_astrometry/${ref_cbid}_vs_${test_cbid}_target_only"
 paths:
   raw_dir: "${run_root}/raw"
   interim_dir: "${run_root}/interim"
@@ -32,7 +28,8 @@ casa:
   timeout_seconds: 86400
   paired_astrometry:
     enabled: true
-    dry_run: false # set true for a read-only MS survey/selection plan, no tclean
+    experiment_mode: target_only # no calibrator MS access or calibrator imaging/QA
+    dry_run: true # selection-only first; set false for imaging after inspection
     output_dir: "${run_root}"
     datacolumn: data # SDP-corrected values are already in DATA
     occupancy_threshold: 0.8
@@ -41,16 +38,12 @@ casa:
     chunk_rows: 128
     max_chunk_bytes: 67108864
     fields:
-      - name: "${gain_field}"
-        kind: gain_calibrator
-        reference_ms: "${data_root}/${ref_gain_stem}.ms" # PLACEHOLDER layout
-        test_ms: "${data_root}/${test_gain_stem}.ms" # PLACEHOLDER layout
       - name: "${field}"
         kind: target
         reference_ms: "${data_root}/${ref_stem}.ms" # PLACEHOLDER layout
         test_ms: "${data_root}/${test_stem}.ms" # PLACEHOLDER layout
     tclean:
-      cell: 0.6arcsec
+      cell: 1.2arcsec
       imsize: 4096
       niter: 10000
       threshold: 1uJy

@@ -1,8 +1,10 @@
 # CMC1–GPU/CMC2 frequency-matched astrometry imaging
 
 This is an **opt-in CASA 6 imaging mode** for already SDP-corrected MSs. It images
-both reference and test, separately for `J1619-8418` (gain calibrator) and
-`J2147-8132` (target). Each field can have its own reference/test MS, as in the
+both reference and test. The default `experiment_mode: calibrator_and_target`
+images `J1619-8418` (gain calibrator) and `J2147-8132` (target) separately.
+Explicit `experiment_mode: target_only` images only the configured target.
+Each field can have its own reference/test MS, as in the
 samples; a multi-field MS may also be supplied for both field entries. Names
 must match exactly and identify one FIELD row in each MS. Scans are discovered
 independently per field and MS; they are never inferred from filenames or shared
@@ -16,6 +18,61 @@ mode uses its explicit field input mapping and launches one CASA process for the
 whole experiment. It does not automatically wire these new products into the
 older source-finding/cross-match pipeline; inspect their manifests before choosing
 images to compare. Use `cal`, not `all` or `images`, for this imaging experiment.
+
+## Explicit target-only experiment
+
+Set `casa.paired_astrometry.experiment_mode: target_only` and provide exactly one
+`fields` entry with `kind: target`, its actual FIELD name, `reference_ms`, and
+`test_ms`. Remove gain-calibrator entries from this mapping. The default remains
+`calibrator_and_target`, which requires one gain calibrator and one target.
+Unknown modes, duplicate/missing targets, or calibrator entries in target-only
+mode fail validation before MS path resolution. There is no automatic fallback
+when a calibrator has no usable channels. Legacy `reference.ms_paths` / test MS
+lists are unused in either paired mode.
+
+Target-only mode never requires, opens, surveys, calibrates, images or modifies a
+calibrator MS. It preserves the same positive-finite-weight/FLAG criteria,
+reference-defined native quartiles, gap-preserving selectors and common interval
+overlap rules. Defaults remain 80% occupancy and 90% common coverage. Zero weights
+remain unusable; this option does not repair an export or substitute weights.
+
+Use `configs/paired_astrometry/l_band_target_only.yaml` or
+`configs/paired_astrometry/s4_target_only.yaml`. Replace placeholder CBIDs/modes
+and verify the two target MS paths. `field: J2147-8132` selects the actual FIELD
+name; the independent `target_file_tag: J2147` builds filenames such as
+`1785059546_J2147_SDPflags+cal.4kL.ms`. Both samples use already corrected `DATA`
+and a separate `_target_only` output directory. Do not change existing MS data,
+weights or flags to make eligibility pass.
+
+From the repository root inside tmux/screen, use the CASA 6.6.5 executable found
+on bruce. The new samples default to `dry_run: true`, so this exact command
+performs the selection-only survey and writes the planned target image matrix:
+
+```bash
+CASA=/opt/casa-6.6.5-31-py3.10.el8/bin/casa \
+  meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
+```
+
+After inspecting the plan, set `casa.paired_astrometry.dry_run: false` in that
+same config. The exact imaging command is:
+
+```bash
+CASA=/opt/casa-6.6.5-31-py3.10.el8/bin/casa \
+  meerkat-ci --config configs/paired_astrometry/l_band_target_only.yaml cal
+```
+
+For S4 use `configs/paired_astrometry/s4_target_only.yaml` in both commands.
+These commands require the package installed in the orchestration Python
+environment; the equivalent `PYTHONPATH="$PWD/src" python -m
+meerkat_corr_imaging.cli` invocation also works. Neither real-MS selection nor
+CASA imaging was performed locally while implementing this mode.
+
+Target-only results provide **no calibrator-image check of phase transfer or
+astrometric systematics**. A successful target run is not evidence that the
+gain-calibrator export or its calibration corrections were valid. Independently
+verify calibration provenance and phase transfer before interpreting target
+offsets. Existing frequency/scan, beam, UV-coverage and input-weight effective
+frequency limitations below continue to apply.
 
 ## Remote run
 
@@ -174,7 +231,9 @@ independent scans with a common requested selection, not guaranteed equal actual
 support or temporal pairing. No reference/test scan correspondence is inferred.
 
 For each field and each MS there are three all-scan images and one full-band image
-per discovered scan: total `12 + sum(scan counts across the four field/MS inputs)`.
+per discovered scan. `calibrator_and_target` totals
+`12 + sum(scan counts across the four field/MS inputs)`;
+`target_only` totals `6 + N_reference_target_scans + N_test_target_scans`.
 All are single-term Stokes-I MFS. No calibrator and target scans are combined.
 
 ## Provenance, reruns, and parameters
@@ -189,15 +248,26 @@ a common `restoringbeam` is explicitly configured. The output includes:
 * `native_channel_diagnostics.json`: both native channel inventories, denominator,
   flag/weight/absence counts, correlations, scans, native quartile IDs and fractions.
 * `selection_plan.json`: every planned image and complete immutable input/task
-  contract, including paired selections. This is also the dry-run deliverable.
+  contract, including paired selections and experiment mode. This is also the
+  dry-run deliverable.
 * `images/*.manifest.json`: running/complete/failed status, input contract and
   fingerprint, timestamps, errors, FITS celestial WCS geometric centre/reference
   pixel/reference coordinates, restoring beam, and all resolved tclean parameters.
 * `run_manifest.json`: the completed run's matrix, including failures and reused
   products. A failed task makes the batch exit unsuccessfully.
 * `planning_failure.json`: field/product context and selection error if overlap
-  planning fails. Native diagnostics for all four inputs are preserved in this
+  planning fails. Native diagnostics for all configured inputs are preserved in this
   case; no imaging has started.
+
+The plan, native diagnostics and each per-image contract record `experiment_mode`,
+`calibrator_imaging_qa_status`, and `interpretation_limitations`. In target-only
+mode the status is explicitly `not_performed_target_only`. This describes omitted
+calibrator imaging/QA, not the target's calibration history. Combined mode records
+calibrator products as requested; their individual processing status determines
+whether they completed. The mode is part of every image fingerprint: switching
+modes cannot reuse incompatible target products in the same output directory.
+Old manifests lacking this provenance also fail the fingerprint check; use a
+fresh output directory. No mode change deletes existing products.
 
 Requested channel records come from the aggregate field selection. The separate
 `selected_channels_with_actual_data` records and `selection.contributed_channel_ids`
@@ -260,3 +330,7 @@ dispatch, image provenance, failure status, chunk-independent input identity,
 external-mask changes and stale-output refusal. Synthetic FITS tests verify WCS
 centre and restoring-beam extraction. These tests do not validate CASA execution
 or claim an observed astrometric accuracy.
+Target-only tests also verify mode conflicts/defaults, independent scan counts,
+frequency coverage, omitted-QA provenance, zero-weight rejection, mode-change
+stale-output detection, compatibility dispatch, and a guarded run that refuses
+any calibrator filesystem access or calibration call.

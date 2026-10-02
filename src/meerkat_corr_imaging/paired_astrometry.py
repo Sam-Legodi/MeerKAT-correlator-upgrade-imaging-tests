@@ -28,7 +28,7 @@ POLICY = {
     'stokes_i': 'both XX/YY or RR/LL must have finite DATA and positive finite weights; jointly valid hands contribute together',
     'effective_frequency': 'sum of native channel centres weighted by summed positive input weights on jointly valid Stokes-I opportunities; not Briggs/gridding weights',
 }
-DEFAULTS = dict(enabled=False, occupancy_threshold=0.8, min_common_coverage=0.9,
+DEFAULTS = dict(enabled=False, experiment_mode='calibrator_and_target', occupancy_threshold=0.8, min_common_coverage=0.9,
                 min_channel_overlap=0.9, chunk_rows=128, max_chunk_bytes=67108864,
                 datacolumn='data', dry_run=False, output_dir='', fields=[], tclean={})
 IMAGING_DEFAULTS = dict(cell='1.2arcsec', imsize=4096, niter=10000, gain=0.1,
@@ -55,6 +55,8 @@ def validate_config(raw):
         raise ValueError('Unknown paired_astrometry options: ' + ', '.join(sorted(unknown)))
     cfg = copy.deepcopy(DEFAULTS)
     cfg.update(copy.deepcopy(raw))
+    if cfg['experiment_mode'] not in ('calibrator_and_target', 'target_only'):
+        raise ValueError('experiment_mode must be calibrator_and_target or target_only')
     for name in ('enabled', 'dry_run'):
         if not isinstance(cfg[name], bool):
             raise ValueError(name + ' must be boolean')
@@ -87,13 +89,28 @@ def validate_config(raw):
                 raise ValueError('Each field needs nonempty name, kind, reference_ms, test_ms')
             if field['kind'] not in ('gain_calibrator', 'target'):
                 raise ValueError('field kind must be gain_calibrator or target')
-            if os.path.realpath(field['reference_ms']) == os.path.realpath(field['test_ms']):
-                raise ValueError('Reference and test must be distinct MSs')
             kinds.append(field['kind'])
             names.append(field['name'])
-        if sorted(kinds) != ['gain_calibrator', 'target'] or len(set(names)) != len(names):
-            raise ValueError('Specify one distinct gain_calibrator and one target field')
+        expected = ['target'] if cfg['experiment_mode'] == 'target_only' else ['gain_calibrator', 'target']
+        if sorted(kinds) != expected or len(set(names)) != len(names):
+            if cfg['experiment_mode'] == 'target_only':
+                raise ValueError('target_only requires exactly one target field; remove all gain_calibrator entries')
+            raise ValueError('calibrator_and_target requires one distinct gain_calibrator and one target field; target-only runs require explicit experiment_mode: target_only')
+        # Check mode conflicts before resolving any MS paths, including rejected
+        # calibrator entries. Target-only never examines legacy/calibrator MSs.
+        for field in cfg['fields']:
+            if os.path.realpath(field['reference_ms']) == os.path.realpath(field['test_ms']):
+                raise ValueError('Reference and test must be distinct MSs')
     return cfg
+
+
+def experiment_provenance(cfg):
+    target_only = cfg['experiment_mode'] == 'target_only'
+    return dict(experiment_mode=cfg['experiment_mode'],
+        calibrator_imaging_qa_status=('not_performed_target_only' if target_only else
+            'requested_in_separate_products; see per-image processing status'),
+        interpretation_limitations=('Target-only results provide no calibrator-image check of phase transfer or astrometric systematics.'
+            if target_only else 'Calibrator and target images are evaluated separately; imaging does not establish calibration accuracy.'))
 
 
 def write_json(path, value):
@@ -625,6 +642,7 @@ def build_plan(cfg, factory, task, version):
     cfg = validate_config(cfg)
     if not cfg['enabled']:
         raise ValueError('paired_astrometry.enabled must be true')
+    experiment = experiment_provenance(cfg)
     if not str(version).startswith('6.'):
         raise RuntimeError('Paired astrometry requires CASA 6; found ' + str(version))
     defaults = task_defaults(task)
@@ -653,7 +671,7 @@ def build_plan(cfg, factory, task, version):
         usable = {role: [c for c in channels if c['eligible']] for role, channels in native.items()}
         native_bands = {role: quartiles(channels) if len(channels) >= 4 else {} for role, channels in usable.items()}
         for role, s in pair.items():
-            diagnostics.append(dict(ms_identity=s['identity'], role=role, field_name=field['name'], field_kind=field['kind'],
+            diagnostics.append(dict(**experiment, ms_identity=s['identity'], role=role, field_name=field['name'], field_kind=field['kind'],
                 field_id=s['metadata']['field_id'], phase_centre=s['metadata']['phase_centre'], scan_ids=sorted(s['by_scan']),
                 occupancy_threshold=cfg['occupancy_threshold'], occupancy_policy=POLICY,
                 selected_correlations=s['correlations'], weight_sources=s['weight_sources'], raw_flag_bits=s['raw_flag_bits'],
@@ -697,7 +715,7 @@ def build_plan(cfg, factory, task, version):
                         parallel=False, interactive=False, restoration=True, calcpsf=True, calcres=True)
                     if dependency_cache is None:
                         dependency_cache = imaging_dependencies(params)
-                    contract = dict(schema_version=SCHEMA, ms_identity=s['identity'], ms_role=role,
+                    contract = dict(**experiment, schema_version=SCHEMA, ms_identity=s['identity'], ms_role=role,
                         paired_inputs={r: dict(ms_identity=sv['identity'],
                             field_id=sv['metadata']['field_id'], field_name=field['name']) for r, sv in pair.items()},
                         field_id=s['metadata']['field_id'], field_name=field['name'], field_kind=field['kind'], scan_ids=scan_ids,
@@ -717,7 +735,7 @@ def build_plan(cfg, factory, task, version):
                         output_paths=dict(casa_image=name+'.image', fits=name+'.fits', qa=name+'_qa.txt', manifest=name+'.manifest.json'))
                     products.append(dict(contract=contract, fingerprint=digest(contract), processing_status='planned',
                         fits_wcs_centre=None, restoring_beam=None, contribution_status='predicted_from_MS_flags_weights_finite_DATA; gridding contribution unmeasured'))
-    return dict(schema_version=SCHEMA, casa_version=version, config=cfg, native_diagnostics=diagnostics, images=products)
+    return dict(**experiment, schema_version=SCHEMA, casa_version=version, config=cfg, native_diagnostics=diagnostics, images=products)
 
 
 def output_state(product):
@@ -766,6 +784,8 @@ def fits_metadata(path):
 def execute_plan(plan, task, export, qa=None):
     """Preflight every output before any expensive tclean; never auto-delete."""
     cfg = plan['config']
+    print('Experiment mode: {}. Calibrator imaging/QA: {}.'.format(
+        plan['experiment_mode'], plan['calibrator_imaging_qa_status']), flush=True)
     output = os.path.realpath(os.path.expanduser(cfg['output_dir']))
     # A dry run uses a separate plan file and never overwrites completed image manifests.
     write_json(os.path.join(output, 'selection_plan.json'), plan)
@@ -817,6 +837,7 @@ def execute_plan(plan, task, export, qa=None):
 
 
 def run(cfg, factory=None, task=None, export=None, qa=None):
+    cfg = validate_config(cfg)
     import casatasks
     from casatools import table
     version = casatasks.version_string()
@@ -825,7 +846,7 @@ def run(cfg, factory=None, task=None, export=None, qa=None):
     except SelectionPlanningError as error:
         output = os.path.realpath(os.path.expanduser(cfg['output_dir']))
         write_json(os.path.join(output, 'native_channel_diagnostics.json'), error.diagnostics)
-        write_json(os.path.join(output, 'planning_failure.json'), dict(processing_status='failed',
+        write_json(os.path.join(output, 'planning_failure.json'), dict(**experiment_provenance(cfg), processing_status='failed',
             phase='selection', error=str(error), casa_version=version, config=cfg,
             finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat()))
         raise
