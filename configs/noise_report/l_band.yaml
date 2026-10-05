@@ -1,0 +1,42 @@
+# Edit remote paths and supply the completed manifests for these exact images.
+# Run inside tmux: meerkat-ci noise-report --config configs/noise_report/l_band.yaml
+project_name: L-band CMC1 GPU noise verification
+path_vars:
+  input_root: /srv/meerkat/L
+  output_root: /srv/meerkat/analysis/L_noise
+paths:
+  raw_dir: ${output_root}/raw
+  interim_dir: ${output_root}/interim
+  processed_dir: ${output_root}/processed
+  reports_dir: ${output_root}/reports
+  sky_xmatches_dir: ${output_root}/processed/Sky-CrossMatches
+reference: {name: CMC1_L, ms_paths: [], images: []}
+tests: [{name: GPU_L, ms_paths: [], images: []}]
+casa: {imaging_enabled: false}
+low_high_slice: {enabled: false, add_to_source_finding: false}
+pybdsf: {overwrite: false, thresh_isl: 3.5, thresh_pix: 5.0, adaptive_rms_box: false}
+xmatch: {max_sep_arcsec: 5.0}
+extra:
+  sensitivity:
+    output_json: ${output_root}/sensitivity.json
+    products:
+      mfs:
+        reference:
+          ms: ${input_root}/CMC1/corrected.ms
+          image: ${input_root}/CMC1/images/mfs.fits
+          manifest: ${input_root}/CMC1/images/mfs.manifest.json
+          band: L
+          pb_corrected: false
+          # non_pb_image: only add if image above is PB-corrected; same selection required
+        test:
+          ms: ${input_root}/GPU/corrected.ms
+          image: ${input_root}/GPU/images/mfs.fits
+          manifest: ${input_root}/GPU/images/mfs.manifest.json
+          band: L
+          pb_corrected: false
+      low:
+        reference: {ms: '${input_root}/CMC1/corrected.ms', image: '${input_root}/CMC1/images/low.fits', manifest: '${input_root}/CMC1/images/low.manifest.json', band: L, pb_corrected: false}
+        test: {ms: '${input_root}/GPU/corrected.ms', image: '${input_root}/GPU/images/low.fits', manifest: '${input_root}/GPU/images/low.manifest.json', band: L, pb_corrected: false}
+      high:
+        reference: {ms: '${input_root}/CMC1/corrected.ms', image: '${input_root}/CMC1/images/high.fits', manifest: '${input_root}/CMC1/images/high.manifest.json', band: L, pb_corrected: false}
+        test: {ms: '${input_root}/GPU/corrected.ms', image: '${input_root}/GPU/images/high.fits', manifest: '${input_root}/GPU/images/high.manifest.json', band: L, pb_corrected: false}

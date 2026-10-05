@@ -1,0 +1,43 @@
+# Edit remote paths and supply completed manifests for these exact products.
+project_name: S4 CMC1 GPU noise verification
+path_vars:
+  input_root: /srv/meerkat/S4
+  output_root: /srv/meerkat/analysis/S4_noise
+paths:
+  raw_dir: ${output_root}/raw
+  interim_dir: ${output_root}/interim
+  processed_dir: ${output_root}/processed
+  reports_dir: ${output_root}/reports
+  sky_xmatches_dir: ${output_root}/processed/Sky-CrossMatches
+reference: {name: CMC1_S4, ms_paths: [], images: []}
+tests: [{name: GPU_S4, ms_paths: [], images: []}]
+casa: {imaging_enabled: false}
+low_high_slice: {enabled: false, add_to_source_finding: false}
+pybdsf: {overwrite: false, thresh_isl: 3.5, thresh_pix: 5.0, adaptive_rms_box: false}
+xmatch: {max_sep_arcsec: 5.0}
+extra:
+  sensitivity:
+    output_json: ${output_root}/sensitivity.json
+    products:
+      mfs:
+        reference:
+          ms: ${input_root}/CMC1/corrected.ms
+          image: ${input_root}/CMC1/images/mfs_PB.fits
+          manifest: ${input_root}/CMC1/images/mfs_PB.manifest.json
+          band: S4
+          pb_corrected: true
+          non_pb_image: ${input_root}/CMC1/images/mfs_nonPB.fits
+        test:
+          ms: ${input_root}/GPU/corrected.ms
+          image: ${input_root}/GPU/images/mfs_PB.fits
+          manifest: ${input_root}/GPU/images/mfs_PB.manifest.json
+          band: S4
+          pb_corrected: true
+          non_pb_image: ${input_root}/GPU/images/mfs_nonPB.fits
+      low:
+        reference: {ms: '${input_root}/CMC1/corrected.ms', image: '${input_root}/CMC1/images/low.fits', manifest: '${input_root}/CMC1/images/low.manifest.json', band: S4, pb_corrected: false}
+        test: {ms: '${input_root}/GPU/corrected.ms', image: '${input_root}/GPU/images/low.fits', manifest: '${input_root}/GPU/images/low.manifest.json', band: S4, pb_corrected: false}
+      high:
+        reference: {ms: '${input_root}/CMC1/corrected.ms', image: '${input_root}/CMC1/images/high.fits', manifest: '${input_root}/CMC1/images/high.manifest.json', band: S4, pb_corrected: false}
+        test: {ms: '${input_root}/GPU/corrected.ms', image: '${input_root}/GPU/images/high.fits', manifest: '${input_root}/GPU/images/high.manifest.json', band: S4, pb_corrected: false}
+# Remove optional non_pb_image entries if unavailable; PB comparisons stay qualified.

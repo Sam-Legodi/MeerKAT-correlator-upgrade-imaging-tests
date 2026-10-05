@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import builtins
 import glob
+import csv
+import json
 import os
 from pathlib import Path
 from dataclasses import asdict
@@ -25,13 +27,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from astropy.table import Table  # noqa: E402
 from docx import Document  # noqa: E402
-from docx.shared import Inches  # noqa: E402
+from docx.shared import Inches, Pt, RGBColor  # noqa: E402
 from docx.oxml import OxmlElement  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
 
 from .uncertainty import (UncertaintyConfig, column, enrich_matches, describe, bootstrap,
     format_uncertainty, write_json, linear_fit)
 from .output_paths import draft_docx_path, save_report
+from .thermal_noise import thermal_noise_results, REFERENCE, ASSUMPTIONS
 
 
 # -------- shared helpers (safe column read + docx + figs) --------
@@ -491,6 +494,9 @@ def compare_fluxes_across_band_and_scans(
     scans_glob: Optional[str] = None,
     docx_name: Optional[str] = None,
     uncertainty_config: UncertaintyConfig | None = None,
+    thermal_noise: dict | None = None,
+    sensitivity_json: str | None = None,
+    sensitivity_products: dict | None = None,
 ) -> Dict[str, object]:
     """
     Compare source fluxes between reference and (low/high/full-band) catalogues and build a report.
@@ -500,6 +506,16 @@ def compare_fluxes_across_band_and_scans(
     print(f"\n**** Output directory: {outdir}")
 
     uc = uncertainty_config or UncertaintyConfig()
+    if sensitivity_json:
+        if thermal_noise is not None:
+            raise ValueError("Conflicting sensitivity_json and direct thermal_noise inputs")
+        from .sensitivity_workflow import load
+        all_thermal = load(sensitivity_json, sensitivity_products)["products"]
+        if not {"low", "high", "mfs"} <= set(all_thermal):
+            raise ValueError("Flux analysis requires low/high/mfs sensitivity products")
+        thermal = {p: all_thermal[p] for p in ("low", "high", "mfs")}
+    else:
+        thermal = thermal_noise_results(thermal_noise)
     t_low = enrich_matches(Table.read(ref_low_xmatch), uc)
     t_high = enrich_matches(Table.read(ref_high_xmatch), uc)
     t_mfs = enrich_matches(Table.read(ref_mfs_xmatch), uc)
@@ -813,6 +829,48 @@ def compare_fluxes_across_band_and_scans(
         "Brackets give absolute endpoints. Individual flux and ratio bars propagate catalogue errors. "
         "Aggregate intervals resample matched sources; fitted intervals include both-axis ODR covariance where available. "
         "Fits condition on the displayed inlier selection. Source scatter is not uncertainty of a mean.")
+    doc.add_heading("Theoretical thermal point-source noise", level=1)
+    doc.add_paragraph("Natural-weighting Stokes-I radiometer expectation: "
+        "sigma_I[µJy/beam] = 1e6 * SEFD[Jy] / sqrt(2 * bandwidth_Hz * on_source_seconds * N * (N-1)). " + ASSUMPTIONS)
+    doc.add_paragraph("SEFD reference: " + REFERENCE + ". Actual antenna counts and usable exposure "
+        "replace the calculator's planning defaults; its default RFI percentages are not applied again.")
+    thermal_rows = [["Product / side / band", "RMS µJy/beam", "N", "BW MHz", "Time s", "SEFD Jy"]]
+    for product, sides in thermal.items():
+        for role, info in sides.items():
+            thermal_rows.append([f"{product} / {role} / {info.get('band', '—')}",
+                f"{info['theoretical_rms_ujy_beam']:.3f}" if info['status'] == 'available' else 'unavailable',
+                str(info.get('antenna_count', '—')),
+                f"{info['effective_bandwidth_hz']/1e6:.3f}" if info['status'] == 'available' else '—',
+                f"{info['on_source_integration_s']:.2f}" if info['status'] == 'available' else '—',
+                str(info.get('sefd_jy', '—'))])
+    _add_table(doc, thermal_rows, "Natural-weighting thermal noise; not the RMS necessarily achievable in the final image.")
+    # Keep the new six-column table readable in Word as well as the PDF exporter.
+    thermal_table = doc.tables[-1]
+    thermal_table.autofit = False
+    widths = (1.6, 1.0, .4, 1.0, 1.0, 1.0)
+    for table_column, width in zip(thermal_table.columns, widths):
+        table_column.width = Inches(width)
+    for index, row in enumerate(thermal_table.rows):
+        row._tr.get_or_add_trPr().append(OxmlElement('w:cantSplit'))
+        if index == 0:
+            row._tr.get_or_add_trPr().append(OxmlElement('w:tblHeader'))
+        for cell, width in zip(row.cells, widths):
+            cell.width = Inches(width)
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing = 1.0
+                for run in paragraph.runs:
+                    run.font.size = Pt(9)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+                    run.bold = index == 0
+    notes = {}
+    for product, sides in thermal.items():
+        for role, info in sides.items():
+            note = (info['reason'] if info['status'] != 'available'
+                    else info['input_method'] + "; " + info['approximation'])
+            notes.setdefault(note, []).append(f"{product} / {role}")
+    for note, labels in notes.items():
+        doc.add_paragraph(", ".join(labels) + ": " + note)
     # Ratio error bars retain uncertainties upstream in the FITS sidecars.
     fig_ratio = os.path.join(outdir, 'flux_ratio_uncertainties.png')
     fig, axes = plt.subplots(2, 1, figsize=(8, 7))
@@ -900,17 +958,30 @@ def compare_fluxes_across_band_and_scans(
         doc.add_heading("Per-scan fractional difference (Peak)", level=1)
         _add_table(doc, scan_rows, "Table S1: Per-scan metrics of (test − ref)/ref for peak flux.")
 
-    numeric = {"uncertainty_config": asdict(uc), "statistics": statistics,
+    numeric = {"uncertainty_config": asdict(uc), "statistics": statistics, "thermal_noise": thermal,
         "scans": scan_statistics, "matched_sources": matched_outputs,
         "fits": {"peak_low": fit_low_pk, "peak_high": fit_high_pk, "peak_mfs": fit_mfs_pk,
                  "total_low": fit_total_low, "total_high": fit_total_high, "total_mfs": fit_total_mfs}}
     metrics_path = Path(report_docx).with_suffix('.json')
     write_json(metrics_path, numeric)
+    thermal_path = Path(report_docx).with_suffix('.thermal_noise.csv')
+    with thermal_path.open('w', newline='', encoding='utf-8') as stream:
+        fields = ['product', 'role', 'status', 'theoretical_rms_ujy_beam', 'band', 'sefd_jy',
+                  'antenna_count', 'effective_bandwidth_hz', 'on_source_integration_s',
+                  'flag_fraction', 'usable_fraction_of_present_samples', 'input_method', 'reason',
+                  'approximation', 'assumptions', 'audit_json']
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for product, sides in thermal.items():
+            for role, info in sides.items():
+                writer.writerow({**{key: info.get(key) for key in fields}, 'product': product,
+                    'role': role, 'audit_json': json.dumps(info, sort_keys=True)})
     save_report(doc, report_docx)
 
     return {
         "metrics": numeric,
         "metrics_path": str(metrics_path),
+        "thermal_noise_csv": str(thermal_path),
         "outdir": outdir,
         "report_docx": report_docx,
         "plots_peak": [
@@ -983,6 +1054,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--bootstrap-samples', type=int, default=5000)
     parser.add_argument('--confidence-level', type=float, default=0.6826894921370859)
     parser.add_argument('--random-seed', type=int, default=20260911)
+    parser.add_argument('--sensitivity-json', help='Versioned precomputed sensitivity file; never opens MS')
+    parser.add_argument('--sensitivity-products-json', help='Explicit expected image/selection associations')
+    parser.add_argument('--thermal-noise-json', default=None,
+        help='JSON mapping low/high/mfs to reference/test MS or auditable metadata inputs. '
+             'Reports natural-weighting thermal RMS only; missing metadata remains unavailable.')
     return parser
 
 
@@ -997,6 +1073,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         scans_glob=args.scans_glob,
         docx_name=args.docx_name,
         uncertainty_config=UncertaintyConfig(args.bootstrap_samples, args.confidence_level, args.random_seed),
+        thermal_noise=json.loads(args.thermal_noise_json) if args.thermal_noise_json else None,
+        sensitivity_json=args.sensitivity_json,
+        sensitivity_products=json.loads(args.sensitivity_products_json) if args.sensitivity_products_json else None,
     )
 
     print("**** DOCX report :", result["report_docx"])

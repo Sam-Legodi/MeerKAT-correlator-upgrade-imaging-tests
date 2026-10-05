@@ -12,6 +12,7 @@ from .output_paths import export_pdf
 from .audit import run_step_with_audit
 from .config import load_config
 from .image_pipeline import wire_image_pipeline
+from .sensitivity_workflow import generate, wire_noise_pipeline, load, json_path, configured_products
 from .steps import (
     step2_vis_analysis,
     step3_calibrate_image,
@@ -35,6 +36,7 @@ STEP_RUNNERS = {
     "report": ("step8_verification_report", step8_verification_report.run),
 }
 ALL_STEPS = tuple(STEP_RUNNERS)
+STEP_RUNNERS["sensitivity"] = ("sensitivity_metadata", generate)
 IMAGE_STEPS = ("low_high_slice", "src", "xm", "pos", "flux", "report")
 IMAGE_COMMANDS = {"images", "image", "image_all", "all_images"}
 
@@ -92,6 +94,9 @@ def main(argv=None):
     p.add_argument("--no-imaging", action="store_true", help="Disable CASA imaging in cal/all (overrides config)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser("sensitivity", help="Write selected-MS natural-weight sensitivity JSON")
+    noise = sub.add_parser("noise-report", help="Sensitivity -> src -> xm -> pos -> flux -> report from supplied FITS")
+    noise.add_argument("--reuse-sensitivity", action="store_true", help="Use existing JSON without opening MSs")
     sub.add_parser("vis", help="Run visibility QA (step 2)")
     sub.add_parser("cal", help="Run CASA calibration/imaging (step 3)")
     sub.add_parser("low_high_slice", help="Extract low/high planes from MFImage cuboids (step 4)")
@@ -119,7 +124,15 @@ def main(argv=None):
     if args.no_imaging:
         cfg.casa.imaging_enabled = False
 
-    if args.cmd in IMAGE_COMMANDS:
+    if args.cmd == "noise-report":
+        wire_noise_pipeline(cfg)
+        if args.reuse_sensitivity:
+            artifact = json_path(cfg)
+            if not artifact:
+                raise ValueError("Previously generated sensitivity JSON path required")
+            load(artifact, configured_products(cfg))
+        requested_steps = (("sensitivity",) if not args.reuse_sensitivity else ()) + ("src", "xm", "pos", "flux", "report")
+    elif args.cmd in IMAGE_COMMANDS:
         plan = wire_image_pipeline(cfg)
         print(
             "[IMAGE PIPELINE] Wired "

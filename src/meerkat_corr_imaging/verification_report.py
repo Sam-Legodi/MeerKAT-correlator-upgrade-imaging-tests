@@ -106,6 +106,7 @@ class BandResult:
     decisions: dict = field(default_factory=dict)
     uncertainty_provenance: dict = field(default_factory=dict)
     matched_sources_output: str | None = None
+    noise_comparison: dict = field(default_factory=dict)
 
 
 def _finite(value: float | None) -> bool:
@@ -292,7 +293,9 @@ def _band_inputs(cfg: Config) -> list[dict[str, str]]:
             continue
         items.append(
             {
-                "band": _band_name(str(entry.get("otherdatatag", entry["xmatch_table"]))),
+                "band": ({"mfs":"MFS", "low":"Low band", "high":"High band"}.get(entry.get("product"), entry.get("product"))
+                         or _band_name(str(entry.get("otherdatatag", entry["xmatch_table"])))),
+                "product": entry.get("product"),
                 "xmatch_table": str(entry["xmatch_table"]),
                 "reference_image": str(entry["ref_fits"]),
                 "test_image": str(entry["other_fits"]),
@@ -308,9 +311,10 @@ def _score_band(
     uncertainty_config: UncertaintyConfig | None = None,
     matched_output: Path | None = None,
     exposure_ratio_reference_over_test: float | None = None,
+    exposure_assumption: str | None = None,
 ) -> BandResult:
-    reference_state = _correction_state(item["reference_image"])
-    test_state = _correction_state(item["test_image"])
+    reference_state = item.get("correction_state") or _correction_state(item["reference_image"])
+    test_state = item.get("correction_state") or _correction_state(item["test_image"])
     if reference_state != test_state:
         raise ValueError(
             f"PB correction mismatch for {item['band']}: "
@@ -432,7 +436,7 @@ def _score_band(
         "rms": degradation_decision(rms_decision_interval, 1.0),
     }
     decisions["rms"]["conditional"] = True
-    decisions["rms"]["assumption"] = "XX exposure represents the imaged parallel hands; equal effective visibility weights and comparable imaging weighting"
+    decisions["rms"]["assumption"] = exposure_assumption or "XX exposure represents the imaged parallel hands; equal effective visibility weights and comparable imaging weighting"
 
     return BandResult(
         band=item["band"],
@@ -859,6 +863,39 @@ def _build_docx(
     doc.add_paragraph("Catalogue envelopes are conservative sensitivity bounds, not exact combined-coverage intervals. Missing formal errors leave sampling-only intervals, identified in the metrics JSON. Rigid-fit intervals retain the envelope of positional-covariance GLS and paired-source bootstrap intervals. "
         "Post-fit intervals refit resampled inliers; match selection and clipping uncertainty are not included.")
 
+    if any(result.noise_comparison for result in results):
+        doc.add_heading("Natural-weighting thermal-noise comparisons", level=2)
+        doc.add_paragraph("All noise values below are µJy/beam. Measured noise is 1.4826 × MAD in the fixed phase-centred 0.25–0.50 degree annulus. "
+            "Expected GPU = measured CMC1 × sqrt(C_CMC1/C_GPU), using a separate usable parallel-hand Hz s exposure for each product. "
+            "σ_I[µJy/beam] = 10^6 × SEFD[Jy] / sqrt(2 × Δν_eff[Hz] × t[s] × N(N−1)). "
+            "These diagnostic thermal ratios introduce no Pass/Concern threshold. Weighting, taper, calibration and confusion effects are not applied to theoretical sensitivity.")
+        for result in results:
+            comparison = result.noise_comparison
+            if not comparison:
+                continue
+            doc.add_heading(result.band, level=3)
+            columns = [("Measured GPU σ_GPU", "measured_gpu_ujy_beam"),
+                ("CMC1-scaled σ_expected,GPU", "expected_gpu_ujy_beam"),
+                ("Natural σ_thermal,GPU", "thermal_gpu_ujy_beam"),
+                ("Measured GPU / thermal GPU", "measured_gpu_over_thermal_gpu"),
+                ("Expected GPU / thermal GPU", "expected_gpu_over_thermal_gpu"),
+                ("Measured CMC1 / thermal CMC1", "measured_reference_over_thermal_reference")]
+            extra = comparison.get("non_pb_comparison") or {}
+            _add_table(doc, ["Quantity", "Supplied images", "Corresponding non-PB images"],
+                [[label, _fmt(comparison.get(key)), _fmt(extra.get(key))] for label,key in columns])
+            doc.add_paragraph(comparison["qualification"])
+            if extra:
+                doc.add_paragraph(extra.get("qualification") or extra.get("reason", ""))
+            for role, inputs in comparison["sensitivity_inputs"].items():
+                doc.add_paragraph(f"{role}: {inputs['status']}; {inputs['approximation_status']}; "
+                    f"N={inputs.get('antenna_count')}, antenna IDs={inputs.get('antenna_ids')}; "
+                    f"Δν_eff={_fmt(inputs.get('effective_bandwidth_hz'))} Hz; t={_fmt(inputs.get('on_source_integration_s'))} s; "
+                    f"C={_fmt(inputs.get('parallel_hand_exposure_hz_s'))} Hz s; "
+                    f"SEFD={inputs.get('sefd_jy')} Jy ({inputs.get('band')}); {inputs.get('sefd_reference')}. "
+                    f"Imaging context: {inputs.get('imaging_context', {})}. "
+                    f"{inputs.get('reason') or inputs.get('approximation', '')}")
+            doc.add_paragraph("Exact requested/resolved selections and MS/image identities are retained in the accompanying metrics JSON.")
+
     if visibility_summary is not None and not visibility_summary.empty:
         doc.add_heading("Visibility comparison with CMC1", level=2)
         doc.add_paragraph("Flagging differences are bootstrapped over whole scans. Amplitude-oscillation differences use the 95th percentile of physical-baseline scan medians and are bootstrapped over baselines. "
@@ -980,7 +1017,13 @@ def build_verification_report(cfg: Config) -> Path:
     reference_visibility = visibility_directory(report_cfg.get("reference_visibility_results"), cfg.reference.ms_paths)
     test_visibility = visibility_directory(report_cfg.get("test_visibility_results"), cfg.tests[0].ms_paths)
     exposure_info: dict[str, Any] = {"reference": None, "test": None, "ratio_reference_over_test": None}
-    if reference_visibility is not None and test_visibility is not None:
+    from .sensitivity_workflow import (json_path, configured_products, load, exposure_ratio,
+        noise_comparison, absolute, EXPOSURE_DEFINITION)
+    artifact = json_path(cfg)
+    thermal = load(artifact, configured_products(cfg))["products"] if artifact else None
+    if thermal is not None:
+        exposure_info = dict(method=EXPOSURE_DEFINITION, sensitivity_json=artifact, products={})
+    elif reference_visibility is not None and test_visibility is not None:
         try:
             exposure_info["reference"] = visibility_exposure(reference_visibility)
             exposure_info["test"] = visibility_exposure(test_visibility)
@@ -992,12 +1035,49 @@ def build_verification_report(cfg: Config) -> Path:
         exposure_info["reason"] = "paired visibility summaries unavailable"
     observation_label = cfg.tests[0].name.removeprefix("CMC2_")
     output_dir = Path(cfg.paths.reports_dir).expanduser() / "imaging_verification"
-    results = [
-        _score_band(item, catalogue_counts.get(item["band"], (None, None)), uc,
-            output_dir / f"{observation_label}_{index}_matched_uncertainties.fits",
-            exposure_info["ratio_reference_over_test"])
-        for index, item in enumerate(inputs)
-    ]
+    results = []
+    for index, item in enumerate(inputs):
+        sides = None
+        ratio = exposure_info.get("ratio_reference_over_test")
+        assumption = None
+        if thermal is not None:
+            product = item["product"]
+            if product is None:
+                # Match an explicit image pair, never infer a selection from a name.
+                matches = [p for p, v in thermal.items() if all(absolute(v[r]["image"]) == absolute(item[k])
+                           for r,k in (("reference", "reference_image"), ("test", "test_image")))]
+                if len(matches) != 1:
+                    raise ValueError("Report image/sensitivity association is ambiguous")
+                product = matches[0]
+            sides = thermal[product]
+            if any(absolute(sides[r]["image"]) != absolute(item[k]) for r,k in
+                   (("reference", "reference_image"), ("test", "test_image"))):
+                raise ValueError("Report image/sensitivity association mismatch")
+            pb = [sides[r]["pb_corrected"] for r in ("reference", "test")]
+            if pb[0] != pb[1] or type(pb[0]) is not bool:
+                raise ValueError("Report requires explicit matching PB correction states")
+            item["correction_state"] = "PB-corrected" if pb[0] else "non-PB"
+            ratio = exposure_ratio(sides)
+            assumption = "Product-specific usable parallel-hand Hz s exposure; equal band SEFD and comparable imaging weighting. " + EXPOSURE_DEFINITION
+            exposure_info["products"][product] = dict(ratio_reference_over_test=ratio,
+                approximation_status={r:sides[r]["approximation_status"] for r in ("reference", "test")})
+        result = _score_band(item, catalogue_counts.get(item["band"], (None, None)), uc,
+            output_dir / f"{observation_label}_{index}_matched_uncertainties.fits", ratio, assumption)
+        if sides:
+            result.noise_comparison = noise_comparison(sides, result.reference_rms_jy_per_beam, result.test_rms_jy_per_beam)
+            non_pb = [sides[r]["association"].get("non_pb_image") for r in ("reference", "test")]
+            if any(non_pb):
+                extra = dict(status="unavailable", reason="Both corresponding non-PB images required")
+                if all(non_pb):
+                    try:
+                        values = [_robust_rms(p) for p in non_pb]
+                        extra = noise_comparison(sides, *values)
+                        extra.update(status="available", qualified_pb_comparison=False,
+                            qualification="Corresponding non-PB images: uncorrected annular versus on-axis natural-weight sensitivity; weighting/taper may differ.")
+                    except (OSError, ValueError) as exc:
+                        extra["reason"] = str(exc)
+                result.noise_comparison["non_pb_comparison"] = extra
+        results.append(result)
 
     observation_label = cfg.tests[0].name.removeprefix("CMC2_")
     output_dir = Path(cfg.paths.reports_dir).expanduser() / "imaging_verification"

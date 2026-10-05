@@ -500,6 +500,88 @@ Outputs:
 
 * Plots and `draft_*.docx` files under `data/reports/flux/` (or your configured location).
 
+##### Theoretical thermal point-source noise
+
+The `flux` report now includes natural-weighting Stokes-I thermal RMS in µJy/beam:
+
+```text
+sigma_I = SEFD / sqrt(2 * effective_bandwidth_Hz * on_source_seconds * N * (N-1))
+```
+
+Per-antenna mean SEFDs follow **ESDKB-Sensitivity calculators-051026-112758.pdf**,
+pages 5–6: L 425 Jy, UHF 550 Jy, S0 365 Jy, S1 364 Jy, S2 365 Jy,
+S3 366 Jy and S4 369 Jy. S1 is inferred from overlapping sub-bands in that
+reference. A band-mean SEFD is an approximation to its frequency-dependent curve.
+The calculator's default antenna counts and RFI losses are **not** imposed on data.
+
+For a single flux comparison with one reference and one test, the step uses each
+target's single `ms_paths` entry, `casa.field`, `casa.scans`, `casa.datacolumn`, and
+the shared `frequency_ranges` for low/high products. MFS requests all channels.
+This inference assumes those are the selections used for the catalogue images;
+extra imaging cuts require explicit inputs. Multiple comparisons or multiple MSs
+require explicit per-product associations. S0–S4 is taken from an explicit target
+name label or `band`; overlapping S sub-bands cannot be identified from a sliced
+frequency range alone. L/UHF is inferred only when the full MS frequency coverage
+identifies one band unambiguously.
+
+Override selections using `extra.flux.thermal_noise.low/high/mfs.reference/test`.
+See `configs/flux_thermal_noise.example.yaml`. Each entry accepts:
+
+* `manifest` and `band`: a **complete paired-astrometry image manifest**. The step
+  reads its MS, field, scans, requested channels and data column, then re-reads
+  the current MS. Keep the imaged MS flags/data unchanged when using this path.
+* `ms`, `field`, optional `scans` (integer list or comma-separated IDs), `band`,
+  `datacolumn` (default `data`), `frequency_range_hz` (inclusive channel centres),
+  or `channels` (mapping SPW IDs to zero-based channel indices). No implicit
+  union of separately imaged scans or selection based on source catalogue rows.
+* `visibility_results`, `band`, and **`allow_approximate: true`**: an existing
+  **field-specific** visibility QA directory. Automatic discovery from
+  `extra.verification_report.reference_visibility_results/test_visibility_results`
+  also requires `extra.flux.allow_approximate: true`. Without opt-in the result
+  remains unavailable.
+  This is explicitly approximate: widths come from native channel spacing,
+  dump duration from median within-scan cadence, and channel flag fractions from
+  `rfi_free_channel_mask.csv`. The spectral diagnostic's `RFI_FREE` gate is not
+  applied as an imaging mask. Weight validity and EXPOSURE metadata were not
+  retained. Scan/channel-index restrictions cannot be recovered this way.
+* When neither MS nor summaries exist: explicit `antenna_count`,
+  `effective_bandwidth_hz`, `on_source_integration_s`, `band`, and a nonempty
+  `provenance` description; optionally `approximation`. Never substitute nominal
+  bandwidth for unflagged bandwidth. Example metadata entry:
+  `{antenna_count: 58, effective_bandwidth_hz: 385000000,
+  on_source_integration_s: 3600, band: L, provenance: 'documented planning example'}`.
+
+For MS inputs, N counts antennas with at least one usable selected cross sample;
+fully flagged antennas and auto-correlations do not contribute. Time is the union
+of selected on-source dump intervals, so baselines/SPWs do not multiply time and
+scan gaps/calibrator time are excluded. Usable cells have FLAG/FLAG_ROW clear,
+finite selected DATA, and positive finite WEIGHT_SPECTRUM (otherwise WEIGHT).
+Both parallel hands must be stored; each valid hand contributes independently.
+Positive weights gate eligibility; their magnitudes do not impose image weights.
+With `C = sum(valid_hand_cell * abs(CHAN_WIDTH) * EXPOSURE)`, effective bandwidth
+is `C / (N*(N-1)*on_source_seconds)`. This equals actual unflagged bandwidth for
+a complete constant array, and accounts for partial flagging, missing baselines,
+and changing participation. Overlapping selected spectral channels and duplicate
+baseline/SPW/time records are rejected to prevent double-counting sensitivity.
+The single bandwidth is an exposure-equivalent summary, not merely a frequency
+span or a union of intermittently available channels.
+
+Results appear in the normal flux DOCX/PDF section, the existing report JSON at
+`thermal_noise.<product>.<reference|test>.theoretical_rms_ujy_beam`, and a new
+`<report-stem>.thermal_noise.csv` beside that JSON. These outputs include N,
+bandwidth, time, band, SEFD, provenance/assumptions and, where recovered, flag
+fractions and channel selection. Missing or unreliable metadata is **unavailable**
+with a reason, while existing catalogue flux results still run. Direct CLI calls
+accept the same mapping through `--thermal-noise-json`.
+
+This is a theoretical natural-weighting point-source expectation, not measured
+image RMS or a replacement for the CMC1-scaled RMS comparison. No Briggs/robust,
+tapering, confusion, calibration, dynamic-range or primary-beam corrections are
+applied, and no Pass/Concern decision is added. The PDF's page-2 quick-look table
+uses **robust −0.5**; its 1-hour L/S4 values (9.1/7.1 µJy/beam) are therefore not
+direct checks of the natural-weighting calculation (about 4.44/3.28 µJy/beam with
+the PDF's planning N and bandwidth assumptions).
+
 #### 3.8 Consolidated verification report (Step 8)
 
 ```bash
@@ -963,3 +1045,130 @@ Existing configurations retain legacy imaging behaviour. See
 [paired astrometry instructions](docs/paired_astrometry.md) and the
 [L-band sample](configs/paired_astrometry/l_band.yaml) /
 [S4 sample](configs/paired_astrometry/s4.yaml).
+
+
+### Remote sensitivity and existing-image noise reports
+
+Use `configs/noise_report/l_band.yaml` or `configs/noise_report/s4.yaml` on the
+server containing the MSs and FITS images. Edit paths, image PB states and exact
+selections first. Outputs can be placed in a fresh directory; visibilities never
+need to be downloaded. These commands schedule **no calibration, imaging or
+low/high slicing**:
+
+```bash
+pip install -e '.[radio]'
+# Install PyBDSF in the same Python environment if catalogues need to be generated.
+tmux new -s noise
+meerkat-ci sensitivity --config configs/noise_report/s4.yaml
+meerkat-ci noise-report --config configs/noise_report/s4.yaml --reuse-sensitivity
+# Or one launch, including sensitivity:
+meerkat-ci noise-report --config configs/noise_report/s4.yaml
+```
+
+The sensitivity-only command needs NumPy and python-casacore, plus normal package
+CLI dependencies, but no PyBDSF or catalogues. It does not require FITS images to
+exist yet. Astropy checks explicit PBCOR headers when images exist. The full
+workflow reuses the existing step audit and DOCX/PDF export. Source finding
+reuses deterministic `pybdsf.results/<base>/<base>-source-cat.fits` and the matching
+ASCII catalogue **only when both exist** and `pybdsf.overwrite: false`; otherwise
+PyBDSF is required and processes the supplied image. Existing catalogue reuse is
+not a validation of the source-finding parameters or catalogue freshness.
+
+`extra.sensitivity.products` is the authoritative per-product reference/test
+association. Products `mfs`, `low`, `high` feed the existing three-band flux step;
+additional products feed positions and the consolidated report. One CMC1/GPU
+pair is supported per launch. Do not also configure `extra.xmatch_pairs`,
+`extra.positions`, or `extra.flux` for `noise-report`: the workflow creates those
+handoffs. Each product specifies `image`, `band`, and boolean `pb_corrected`.
+Prefer `manifest` pointing to the **completed paired-astrometry imaging manifest**
+for that exact FITS image. Its MS identity must still match the current MS.
+The manifest supplies MS, field, scans, channels and data column; conflicting
+explicit selections are rejected. It must use the repository's paired-imaging
+contract, including `output_paths.fits`, `ms_identity`, and requested channels.
+
+Without a manifest supply the exact documented selection, for example:
+
+```yaml
+reference:
+  image: /srv/meerkat/CMC1/images/low.fits
+  ms: /srv/meerkat/CMC1/corrected.ms
+  field: J2147-8132
+  datacolumn: CORRECTED_DATA
+  scans: [4, 7]
+  channels: {'0': [110, 111, 112, 113]} # zero-based native channels; illustrative
+  band: S4
+  pb_corrected: false
+  imaging_context: {weighting: briggs, robust: -0.5, uvtaper: []}
+```
+
+Use explicit `scans: all` / `channels: all` only if that image used all selected
+field scans / all MS channels. These are not guessed from FITS headers or names.
+The low/high channel lists above are examples, not recommended cuts. Copy the
+actual selections from the imaging record. Missing/ambiguous selections remain
+unavailable with a reason. Optional `frequency_range_hz` further restricts channel
+centres; exact channel indices are preferable. Gaincal and target fields require
+separate product associations. No MS concatenation or remote SSH connection is
+performed by this command.
+
+For an explicitly opted-in cache approximation add `visibility_results` and
+`allow_approximate: true` to the association, retaining an explicit MS path,
+field, band, PB state, `scans: all`, and `channels: all`. The MS is not opened in
+this mode. Only full-field/all-scan cached summaries are admissible; frequency
+cuts may be approximated but scan/channel-index cuts cannot. Cache weights,
+finite-data validity and true EXPOSURE metadata were not retained. A paired
+comparison cannot mix exact MS exposure with cached approximate exposure.
+
+#### Sensitivity artifact and reuse contract
+
+`extra.sensitivity.output_json` (or `extra.sensitivity_json` downstream) names the
+atomic JSON output. Different configured JSON paths, or JSON plus explicit
+`extra.flux.thermal_noise`, are rejected. With precomputed JSON the flux/report
+steps never open an MS or recalculate sensitivity. For individually launched
+`flux`/`report`, supply the same `extra.sensitivity.products` associations and
+explicit normal positions/flux handoffs, including the image pair for each
+crossmatch. The module-level flux CLI accepts `--sensitivity-json` and
+`--sensitivity-products-json` for the equivalent handoff.
+
+Schema version 1 / calculation `natural-stokes-i-exposure-1` stores:
+
+* `products.<product>.<reference|test>.theoretical_rms_ujy_beam`, N/antenna IDs,
+  effective Hz, on-source seconds, usable parallel-hand Hz s exposure;
+* band, per-antenna SEFD, reference, formula, units and assumptions;
+* requested association and its digest, resolved selection/actual channel indices
+  and scan IDs, MS file-stat identity, image identities, PB state and imaging context;
+* `status`, `approximation_status`, and failure `reason`.
+
+MS identities exclude mutable lock files. These are file-stat provenance
+fingerprints, not data-content checksums. Consumers validate schema, configured
+image/selection associations, and recorded FITS identities. **They deliberately
+cannot detect later MS changes without reopening it**: regenerate JSON when
+visibilities/flags change. Keep the MS unchanged during generation. A completed
+manifest verifies its stored MS identity. Explicit selections assert the user
+has identified the visibilities underlying the image. JSON generated before an
+image exists has no image-stat snapshot; downstream still checks paths and PB
+headers. The JSON must remain with its selection config for reproducibility.
+
+With C the summed eligible baseline/channel/parallel-hand exposure, each product
+uses `sigma_expected,GPU = measured_CMC1 * sqrt(C_CMC1/C_GPU)` under equal
+band/SEFD and comparable imaging-weight assumptions. The new workflow uses both
+parallel hands consistently and never substitutes the older XX-only exposure
+proxy. Effective bandwidth is C/[N(N−1)t]; the underlying radiometer formula and
+SEFD values above remain unchanged. Positive weights are eligibility gates;
+their magnitudes are not a measured imaging sensitivity correction.
+
+The consolidated DOCX/PDF adds all six requested noise metrics, with values in
+µJy/beam, product-specific exposure and input audit details. They are retained in
+`*_metrics.json` under each band's `noise_comparison`. Flux DOCX/PDF, its normal
+metrics JSON and `.thermal_noise.csv` retain the theoretical RMS and provenance.
+Unavailable JSON results never fall back to an unrelated exposure convention.
+Thermal ratios are diagnostics and do not add acceptance thresholds; the existing
+measured/CMC1-scaled RMS decision retains its conditional imaging assumptions.
+
+Measured image RMS remains 1.4826 × MAD in the phase-centred 0.25–0.50 degree
+annulus. PB-corrected annular noise versus uncorrected on-axis thermal sensitivity
+is explicitly **qualified**, without inventing a PB correction. Supply optional
+`non_pb_image` on **both** sides for corresponding uncorrected images from the
+same visibility selections; an additional column/JSON comparison is then
+measured using the same annulus. Non-PB annular noise can still include imaging
+weighting, taper, confusion and calibration effects. Known weighting/taper is
+recorded as context, never silently corrected.

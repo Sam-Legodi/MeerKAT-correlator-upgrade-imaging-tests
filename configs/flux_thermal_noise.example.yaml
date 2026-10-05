@@ -1,0 +1,35 @@
+# Replace paths with the actual crossmatches and COMPLETE image manifests.
+# These manifests preserve the exact MS, field, scan and channel selection.
+# Run: meerkat-ci flux --config configs/flux_thermal_noise.example.yaml
+project_name: Flux comparison with theoretical thermal noise
+path_vars:
+  analysis_root: /ABS/PATH/TO/ANALYSIS
+paths:
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  reports_dir: data/reports
+  sky_xmatches_dir: data/processed/Sky-CrossMatches
+reference: {name: CMC1_S4, ms_paths: [], images: []}
+tests: [{name: GPU_S4, ms_paths: [], images: []}]
+extra:
+  flux:
+    ref_low_xmatch: ${analysis_root}/reference_X_test_low.fits
+    ref_high_xmatch: ${analysis_root}/reference_X_test_high.fits
+    ref_mfs_xmatch: ${analysis_root}/reference_X_test_mfs.fits
+    docx_name: flux_thermal_noise.docx
+    thermal_noise:
+      low:
+        reference: {manifest: '${analysis_root}/reference_low.manifest.json', band: S4}
+        test: {manifest: '${analysis_root}/test_low.manifest.json', band: S4}
+      high:
+        reference: {manifest: '${analysis_root}/reference_high.manifest.json', band: S4}
+        test: {manifest: '${analysis_root}/test_high.manifest.json', band: S4}
+      mfs:
+        reference: {manifest: '${analysis_root}/reference_mfs.manifest.json', band: S4}
+        test: {manifest: '${analysis_root}/test_mfs.manifest.json', band: S4}
+# Use band: L for L-band. Each manifest must correspond to its catalogue image.
+# Direct MS alternative for any entry:
+# test: {ms: /ABS/PATH/test.ms, field: J2147-8132, scans: [4, 7],
+#        datacolumn: corrected, band: S4, frequency_range_hz: [3.25e9, 3.455e9]}
+# For MFS omit frequency_range_hz only if all MS channels were requested in imaging.
