@@ -139,8 +139,10 @@ def validate_pb_header(spec):
 def generate(cfg):
     from .paired_astrometry import ms_identity
     products = configured_products(cfg)
-    from .audit import register_inputs
-    register_inputs([str(s.get("manifest") or s.get("ms") or "missing MS") for v in products.values() for s in v.values()])
+    from .audit import register_inputs, record_success, record_failure
+    labels = {(product, role): f"{product}/{role}: {spec.get('image', 'missing image')}"
+              for product, sides in products.items() for role, spec in sides.items()}
+    register_inputs(labels.values())
     output = json_path(cfg)
     if not output:
         raise ValueError("extra.sensitivity.output_json is required")
@@ -198,6 +200,14 @@ def generate(cfg):
                   (f"; {result['reason']}" if result["reason"] else ""))
     validate(payload)
     atomic_write(output, payload)
+    # Audit the six image-product calculations, not MS access: cache mode
+    # deliberately never opens MSs. Record outcomes only after the JSON is saved.
+    for product, sides in payload["products"].items():
+        for role, result in sides.items():
+            if result["status"] == "available":
+                record_success(labels[(product, role)], result["approximation_status"])
+            else:
+                record_failure(labels[(product, role)], result["reason"])
     print(f"[SENSITIVITY] Wrote {output}")
     return payload
 

@@ -442,7 +442,7 @@ What happens:
 * Collects images from `reference.images`, each test `images`, resolved
   low/high slice products, and any `extra.images_globs`.
 * Runs `python -m meerkat_corr_imaging.pybdsf_srcfind --images ... [--isl ... --pix ... --freq-* ...]`.
-* Reuses inputs whose FITS and ASCII PyBDSF catalogues already exist. Set
+* Reuses inputs whose FITS PyBDSF catalogue already exists; the ASCII export is optional. Set
   `pybdsf.overwrite: true` to run source finding again and replace them.
 * if input images do not have frequency information in their headers, run this step for each set of images that have the same reference frequency and specify that frequency via `freq_mhz` under the `pybdsf` config section.
 * PyBDSF catalogues land near the images or wherever your script writes them (often under `data/processed/...`).
@@ -1069,9 +1069,11 @@ The sensitivity-only command needs NumPy and python-casacore, plus normal packag
 CLI dependencies, but no PyBDSF or catalogues. It does not require FITS images to
 exist yet. Astropy checks explicit PBCOR headers when images exist. The full
 workflow reuses the existing step audit and DOCX/PDF export. Source finding
-reuses deterministic `pybdsf.results/<base>/<base>-source-cat.fits` and the matching
-ASCII catalogue **only when both exist** and `pybdsf.overwrite: false`; otherwise
-PyBDSF is required and processes the supplied image. Existing catalogue reuse is
+reuses deterministic `pybdsf.results/<base>/<base>-source-cat.fits` when it exists
+and `pybdsf.overwrite: false`; the matching ASCII export is optional. Otherwise
+PyBDSF is required and processes the supplied image. When moving images to a
+server, also copy their `pybdsf.results` directories, preserving relative paths.
+Missing reusable FITS catalogues are reported with the exact expected path. Existing catalogue reuse is
 not a validation of the source-finding parameters or catalogue freshness.
 
 `extra.sensitivity.products` is the authoritative per-product reference/test

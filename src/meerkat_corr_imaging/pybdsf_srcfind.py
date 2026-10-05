@@ -647,7 +647,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         base = compute_base_name(stem, args.base_prefix)
         existing_catalogues = catalogue_paths(image_path, base)
 
-        if not args.overwrite and all(path.is_file() for path in existing_catalogues):
+        # Only the FITS catalogue is consumed downstream. An absent ASCII
+        # convenience export must not trigger source finding or require bdsf.
+        if not args.overwrite and existing_catalogues[0].is_file():
             print(
                 "Skipping {} -> existing PyBDSF catalogues in {}".format(
                     image_path, existing_catalogues[0].parent
@@ -655,6 +657,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             continue
 
+        if not existing_catalogues[0].is_file():
+            print(f"[PYBDSF] Required reusable FITS catalogue missing: {existing_catalogues[0]}", flush=True)
+            print("[PYBDSF] Copy the matching pybdsf.results catalogue directory from the original "
+                  "analysis, or install PyBDSF in this Python environment to generate it.", flush=True)
         freq_hz = determine_frequency(image_path, freq_overrides, args)
 
         try:

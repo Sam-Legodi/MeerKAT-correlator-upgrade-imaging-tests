@@ -294,3 +294,16 @@ def test_old_cached_inference_is_opt_in(tmp_path):
     assert not _thermal_inputs(cfg,{},infer=True)["mfs"]
     result=_thermal_inputs(cfg,dict(allow_approximate=True),infer=True)
     assert result["mfs"]["test"]["allow_approximate"] is True
+
+
+def test_sensitivity_audit_counts_products_not_ms_access(ms, tmp_path, monkeypatch):
+    from meerkat_corr_imaging.audit import run_step_with_audit
+    cfg = config(tmp_path, ms)
+    run_step_with_audit('sensitivity_metadata', tmp_path/'audit', lambda: sw.generate(cfg))
+    log = next((tmp_path/'audit'/'pipeline_audits').glob('*.log')).read_text()
+    assert 'Inputs: 6 succeeded, 0 failed, 0 not run' in log
+    assert 'mfs/test:' in log
+    cfg.extra['sensitivity']['products']['mfs']['test'].pop('scans')
+    run_step_with_audit('sensitivity_metadata', tmp_path/'unavailable', lambda: sw.generate(cfg))
+    log = next((tmp_path/'unavailable'/'pipeline_audits').glob('*.log')).read_text()
+    assert 'Inputs: 5 succeeded, 1 failed, 0 not run' in log

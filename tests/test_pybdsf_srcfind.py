@@ -116,3 +116,34 @@ def test_main_passes_disabled_adaptive_rms_setting(
         == 0
     )
     assert captured["adaptive_rms_box"] is False
+
+
+def test_main_reuses_fits_without_ascii_or_bdsf(tmp_path, monkeypatch, capsys):
+    image = tmp_path / 'image.fits'
+    image.touch()
+    base = pybdsf_srcfind.compute_base_name(image.stem, None)
+    fits_cat, ascii_cat = pybdsf_srcfind.catalogue_paths(str(image.resolve()), base)
+    fits_cat.parent.mkdir(parents=True)
+    fits_cat.touch()
+    assert not ascii_cat.exists()
+    monkeypatch.setattr(pybdsf_srcfind, 'find_sources',
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError('Source finding called')))
+    assert pybdsf_srcfind.main(['--images', str(image)]) == 0
+    assert 'Skipping' in capsys.readouterr().out
+
+
+def test_missing_fits_not_replaced_by_ascii_and_reports_path(tmp_path, monkeypatch, capsys):
+    image = tmp_path / 'image.fits'
+    image.touch()
+    base = pybdsf_srcfind.compute_base_name(image.stem, None)
+    fits_cat, ascii_cat = pybdsf_srcfind.catalogue_paths(str(image.resolve()), base)
+    ascii_cat.parent.mkdir(parents=True)
+    ascii_cat.touch()
+    def unavailable(*args, **kwargs):
+        raise ModuleNotFoundError("No module named 'bdsf'")
+    monkeypatch.setattr(pybdsf_srcfind, 'find_sources', unavailable)
+    assert pybdsf_srcfind.main(['--images', str(image)]) == 3
+    output = capsys.readouterr()
+    assert str(fits_cat) in output.out
+    assert 'Copy the matching pybdsf.results' in output.out
+    assert "No module named 'bdsf'" in output.err
