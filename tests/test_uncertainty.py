@@ -258,3 +258,42 @@ def test_postfit_interval_retains_measurement_uncertainty():
     assert info['sampling']['ci_high'] < 1e-8
     assert info['measurement']['ci_high'] > .1
     assert info['ci_high'] > .1
+
+
+def test_pybdsf_on_sky_ra_errors_at_southern_target():
+    """E_RA in PyBDSF already includes projection; do not shrink it twice."""
+    dec = -81.54
+    errors = np.array([[1., 2., 3., 4.]])/3600
+    on_sky = position_covariance([326.], [dec], [326.], [dec], errors,
+                                 ra_error_convention='on_sky')
+    coordinate = position_covariance([326.], [dec], [326.], [dec], errors)
+    assert on_sky[0, 0, 0] == pytest.approx(10., rel=1e-6)
+    assert on_sky[0, 1, 1] == pytest.approx(20., rel=1e-6)
+    assert coordinate[0, 0, 0] == pytest.approx(10*np.cos(np.deg2rad(dec))**2, rel=1e-6)
+    full = np.diag(errors[0]**2)[None]
+    full[0, 0, 2] = full[0, 2, 0] = .5/3600**2
+    correlated = position_covariance([326.], [dec], [326.], [dec], errors, full,
+                                     ra_error_convention='on_sky')
+    assert correlated[0, 0, 0] == pytest.approx(9., rel=1e-6)
+    mixed = position_covariance([326.], [dec], [326.], [dec], errors,
+                                ra_error_convention=('coordinate', 'on_sky'))
+    assert mixed[0, 0, 0] == pytest.approx(np.cos(np.deg2rad(dec))**2+9, rel=1e-6)
+    t = Table({'RA_1': [326., 326.01, 326.02], 'DEC_1': [dec]*3,
+               'RA_2': [326.0002, 326.0104, 326.0206], 'DEC_2': [dec+.0001]*3})
+    for key, value in zip(('E_RA_1', 'E_DEC_1', 'E_RA_2', 'E_DEC_2'), errors[0]):
+        t[key] = np.full(3, value)*u.deg
+    sky = enrich_matches(t, FAST)
+    coord = enrich_matches(t, FAST, ra_error_convention='coordinate')
+    t.meta.update(RAERR1='coordinate', RAERR2='coordinate')
+    declared = enrich_matches(t, FAST)
+    assert declared['east_offset_err_arcsec'] == pytest.approx(coord['east_offset_err_arcsec'])
+    assert np.all(sky['east_offset_err_arcsec'] > 6*coord['east_offset_err_arcsec'])
+    for name in ('east_offset_arcsec', 'north_offset_arcsec', 'separation_arcsec'):
+        assert np.array_equal(sky[name], coord[name])
+        for fun in (np.mean, np.median, np.std):
+            assert fun(sky[name]) == fun(coord[name])
+        # The centre errors depend only on the unchanged source scatter.
+        assert np.std(sky[name])/np.sqrt(3) == np.std(coord[name])/np.sqrt(3)
+        assert np.median(np.abs(sky[name]-np.median(sky[name]))) == np.median(np.abs(coord[name]-np.median(coord[name])))
+    with pytest.raises(ValueError, match='convention'):
+        position_covariance([326.], [dec], [326.], [dec], errors, ra_error_convention='unknown')

@@ -59,3 +59,33 @@ carries numerical propagated source errors and sampling summaries.
 The consolidated report and matched-source FITS sidecars are under
 `reports_dir/imaging_verification/`. Detailed reports and numerical summaries are
 under `crossmatched-positions/` and `crossmatched-fluxes/`.
+
+## PyBDSF RA error convention
+
+PyBDSF `E_RA` is an on-sky angular standard error, not an RA coordinate
+standard error. `enrich_matches` defaults to this convention. The spherical
+Jacobian divides its RA columns by cos(dec) before applying on-sky input errors,
+so that the projection is not applied twice. Measured sky offsets are unchanged.
+The conversion includes off-diagonal covariances consistently.
+
+The generic `position_covariance` helper retains `coordinate` as its default.
+For matched tables from other producers, pass `ra_error_convention='coordinate'`
+or set `RAERR1` and `RAERR2` table metadata. Mixed catalogues accept a pair such
+as `('on_sky', 'coordinate')`. The phase-centred rigid-fit covariance follows
+the same per-catalogue convention. Angular units alone cannot identify it.
+
+Regression coverage at Dec = -81.54 degrees checks independent and correlated
+on-sky errors, legacy coordinate errors, mixed conventions, metadata, and
+unchanged offsets and scatter statistics. At this declination the previous
+additional cosine suppressed east errors by approximately 6.8 times.
+
+To refresh the existing DRAFT_05 reports reproducibly:
+
+```sh
+python scripts/refresh_draft05_uncertainties.py --reports-dir /path/to/consolidated_reports
+```
+
+The command checks all 24 products against saved centre statistics, refreshes
+144 per-mode figures and their propagated-error FITS tables, replaces only the
+corresponding embedded figures, and records a JSON audit. Combined-mode centre
+errors remain SD/sqrt(N) and the normal-approximation median standard error.

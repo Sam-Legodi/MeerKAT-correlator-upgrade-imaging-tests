@@ -54,7 +54,7 @@ not a report. Its structure matches `verification_report.py`.
 | Quantity | Method |
 |---|---|
 | Individual total/peak ratio and fractional difference | Independent analytic Jacobian; valid positive formal errors only |
-| East/north and phase-centred coordinates | Numerical spherical-coordinate Jacobian, including cos(dec) and induced covariance |
+| East/north and phase-centred coordinates | Numerical spherical-coordinate Jacobian with declared RA-error convention and induced covariance; PyBDSF on-sky errors do not receive a second cos(dec) factor |
 | Radial separation / direction | Jacobian away from zero; Gaussian coordinate Monte Carlo for low-S/N radii; direction undefined at zero |
 | Catalogue mean/SD/median/percentiles/NMAD | Reproducible paired-row percentile bootstrap; consolidated separation/flux metrics also retain fixed-sample measurement Monte Carlo and adopt an interval envelope |
 | Fraction above threshold | Wilson interval, including boundary fractions |

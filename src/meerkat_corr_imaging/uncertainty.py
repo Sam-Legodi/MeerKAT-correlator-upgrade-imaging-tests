@@ -149,12 +149,19 @@ def _offsets(coords):
     return np.column_stack((east.arcsec, north.arcsec))
 
 
-def position_covariance(ra1, dec1, ra2, dec2, errors, covariance=None):
-    """Exact spherical-offset numerical Jacobian, including RA cos(dec).
+def position_covariance(ra1, dec1, ra2, dec2, errors, covariance=None, *,
+                        ra_error_convention="coordinate"):
+    """Exact spherical-offset Jacobian with explicit RA uncertainty convention.
 
-    errors: N x 4 coordinate SDs in degrees. Optional N x 4 x 4 input
-    covariance replaces diagonal independence; output is N x 2 x 2 arcsec².
+    errors: N x 4 SDs in degrees. RA errors may be ``coordinate`` (sigma_alpha)
+    or ``on_sky`` (sigma_alpha*cos(dec), as in PyBDSF). Supply one convention
+    or a pair for reference/test. Optional N x 4 x 4 covariance uses the same
+    input convention and replaces diagonal independence. Output is arcsec².
     """
+    conventions = ((ra_error_convention,) * 2 if isinstance(ra_error_convention, str)
+                   else tuple(ra_error_convention))
+    if len(conventions) != 2 or any(c not in ("coordinate", "on_sky") for c in conventions):
+        raise ValueError("RA error convention must be coordinate or on_sky (one or a pair)")
     coords = np.column_stack((ra1, dec1, ra2, dec2)).astype(float)
     errors = np.asarray(errors, float)
     good = np.isfinite(coords).all(axis=1) & np.isfinite(errors).all(axis=1) & (errors >= 0).all(axis=1)
@@ -169,6 +176,14 @@ def position_covariance(ra1, dec1, ra2, dec2, errors, covariance=None):
         plus[:, j] += step
         minus[:, j] -= step
         jac[:, :, j] = (_offsets(plus)-_offsets(minus))/(2*step)
+    # Convert the Jacobian input basis, not the measured coordinates. This
+    # also transforms off-diagonal covariance consistently for mixed catalogues.
+    for j, convention in zip((0, 2), conventions):
+        if convention == "on_sky":
+            cosine = np.cos(np.deg2rad(x[:, j+1]))
+            if np.any(np.abs(cosine) < 1.e-12):
+                raise ValueError("on-sky RA errors are undefined at the celestial pole")
+            jac[:, :, j] /= cosine[:, None]
     cov = np.zeros((len(x), 4, 4))
     cov[:, np.arange(4), np.arange(4)] = errors[good]**2
     if covariance is not None:
@@ -206,8 +221,21 @@ def radial_errors(xy, cov, config=None):
     return sd, low, high, theta_sd
 
 
-def enrich_matches(table, config=None):
-    """Preserve original columns and append normalized measurements/errors."""
+def catalogue_ra_error_conventions(table, override=None):
+    """PyBDSF-style tables default to on-sky E_RA; other producers must declare
+    ``RAERR1``/``RAERR2`` metadata or pass an explicit override. Units alone do
+    not distinguish coordinate and on-sky errors.
+    """
+    if override is not None:
+        return override
+    return tuple(table.meta.get(f"RAERR{s}", "on_sky") for s in (1, 2))
+
+
+def enrich_matches(table, config=None, *, ra_error_convention=None):
+    """Preserve columns and append errors for a PyBDSF-style matched table.
+
+    Override RA conventions explicitly for coordinate-error or mixed catalogues.
+    """
     t = table.copy()
     for suffix in ('1', '2'):
         for source, name, unit in [('RA', 'ra', u.deg), ('DEC', 'dec', u.deg),
@@ -232,7 +260,13 @@ def enrich_matches(table, config=None):
         xy[good] = _offsets(np.column_stack(coords)[good])
     errors = np.column_stack([column(t, name) for name in ('ra_err_1', 'dec_err_1', 'ra_err_2', 'dec_err_2')])
     cov = np.full((len(t), 2, 2), np.nan)
-    cov[good] = position_covariance(*(c[good] for c in coords), errors[good])
+    conventions = catalogue_ra_error_conventions(t, ra_error_convention)
+    cov[good] = position_covariance(*(c[good] for c in coords), errors[good],
+                                    ra_error_convention=conventions)
+    if isinstance(conventions, str):
+        conventions = (conventions, conventions)
+    for suffix, convention in zip((1, 2), conventions):
+        t.meta[f"RAERR{suffix}"] = convention
     radius = np.full(len(t), np.nan)
     if good.any():
         a = SkyCoord(coords[0][good]*u.deg, coords[1][good]*u.deg)

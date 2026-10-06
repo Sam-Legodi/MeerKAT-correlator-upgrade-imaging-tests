@@ -34,7 +34,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from .uncertainty import (UncertaintyConfig, ONE_SIGMA, column, enrich_matches,
-    bootstrap, wilson, ratio_error, measurement, position_covariance,
+    bootstrap, wilson, ratio_error, measurement, position_covariance, catalogue_ra_error_conventions,
     format_uncertainty, write_json, catalogue_intervals)
 from .reference_comparison import (comparison_config, degradation_decision,
     parity_decision, position_reference_test, visibility_exposure)
@@ -356,7 +356,8 @@ def _score_band(
                 column(quality, f"E_RA_{suffix}", u.deg, error=True),
                 column(quality, f"E_DEC_{suffix}", u.deg, error=True)))
             return position_covariance(np.full(n, center.ra.deg), np.full(n, center.dec.deg),
-                column(quality, f"RA_{suffix}", u.deg), column(quality, f"DEC_{suffix}", u.deg), errors)
+                column(quality, f"RA_{suffix}", u.deg), column(quality, f"DEC_{suffix}", u.deg), errors,
+                ra_error_convention=("coordinate", catalogue_ra_error_conventions(quality)[int(suffix)-1]))
         try:
             rigid_fit = fit_rigid_transform(reference_xy, test_xy,
                 **asdict(uc), reference_covariance=phase_cov("1"), test_covariance=phase_cov("2"))
