@@ -1,0 +1,52 @@
+# Opt-in standalone xm example: use existing source catalogues only.
+# meerkat-ci --config configs/survey_xmatch/local_mfs.yaml xm
+# Choose a fresh sky_xmatches_dir for each rerun; survey outputs are never overwritten.
+project_name: local-SUMSS-RACS-MFS
+path_vars:
+  commissioning: '/Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning'
+  observations: '${commissioning}/Obsevations'
+  catalogues: '${commissioning}/catalogues'
+paths:
+  sky_xmatches_dir: data/survey_validation/Sky-CrossMatches
+  reports_dir: data/survey_validation/reports
+reference:
+  # Available CMC1 source catalogue; 1786962370's catalogue is currently missing.
+  name: CMC1_1785941476_4kL
+  images:
+    - '${observations}/1785941476_cmc14kL/images/1785941476_continuum_image_J2147-8132_IClean_PB.fits'
+tests:
+  - name: GPU_1784437450_32kL
+    images:
+      - '${observations}/1784437450_32kL/images/1784437450_continuum_image_J2147-8132_IClean_PB.fits'
+  - name: GPU_1784443274_8kL
+    images:
+      - '${observations}/1784443274_8kL/images/1784443274_continuum_image_J2147-8132_IClean_PB.fits'
+  - name: GPU_1785059546_4kL
+    images:
+      - '${observations}/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits'
+  - name: GPU_1785065779_1kL
+    images:
+      - '${observations}/1785065779_1kL/images/1785065779_continuum_image_J2147-8132_IClean_PB.fits'
+extra:
+  xmatch_pairs: []
+  positions: []
+  flux: []
+  survey_xmatches:
+    - name: SUMSS_V21r
+      catalogue:
+        profile: sumss_v21r
+        path: '${catalogues}/summs212.fit'
+        hdu: 1
+      radius: 10 arcsec
+      association_mode: all-candidates
+      coverage: unknown
+      # Defaults to MFS, all configured reference/test targets.
+    - name: RACS_low_DR1_gausscut
+      catalogue:
+        profile: racs_low_dr1_gausscut
+        path: '${catalogues}/racs-2deg-nearJ2147.fit'
+        hdu: 1
+      radius: 10 arcsec
+      association_mode: all-candidates
+      coverage: unknown
+      # Sparse rows near J2147 are not independent evidence of survey noncoverage.

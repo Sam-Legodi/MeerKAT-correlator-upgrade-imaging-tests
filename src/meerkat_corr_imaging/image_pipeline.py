@@ -42,6 +42,7 @@ class ImagePipelinePlan:
     xmatch_pairs: tuple[tuple[str, ...], ...]
     positions: tuple[dict[str, Any], ...]
     flux: tuple[dict[str, Any], ...]
+    survey_xmatch_jobs: tuple[dict[str, Any], ...] = ()
 
 
 def _absolute(path: str | Path) -> str:
@@ -269,12 +270,15 @@ def build_image_pipeline_plan(cfg: Config) -> ImagePipelinePlan:
         if key not in configured_flux_keys:
             inferred_flux.append(analysis)
 
+    from .survey_xmatch import resolve_survey_jobs
+    survey_jobs = resolve_survey_jobs(cfg, products)
     return ImagePipelinePlan(
         products=tuple(products),
         matches=tuple(matches),
         xmatch_pairs=tuple(tuple(str(value) for value in entry[:3]) for entry in all_pairs),
         positions=tuple(configured_positions + inferred_positions),
         flux=tuple(configured_flux + inferred_flux),
+        survey_xmatch_jobs=tuple(survey_jobs),
     )
 
 
@@ -286,4 +290,5 @@ def wire_image_pipeline(cfg: Config) -> ImagePipelinePlan:
     cfg.extra["xmatch_pairs"] = [list(entry) for entry in plan.xmatch_pairs]
     cfg.extra["positions"] = [dict(entry) for entry in plan.positions]
     cfg.extra["flux"] = [dict(entry) for entry in plan.flux]
+    cfg.extra["survey_xmatch_jobs"] = list(plan.survey_xmatch_jobs)
     return plan

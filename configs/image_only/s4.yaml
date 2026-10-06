@@ -48,6 +48,19 @@ pybdsf: {thresh_isl: 3.5, thresh_pix: 5.0, freq_mhz: null, freq_hz: null, pblimi
 xmatch: {max_sep_arcsec: 1.0, ra_col_1: "RA", dec_col_1: "DEC", ra_col_2: "RA", dec_col_2: "DEC", coord_frame: "icrs", one_to_many: false}
 
 extra:
+  # Independent CMC1/GPU MFS astrometry candidates against SUMSS.
+  # Keep ambiguity flags; these tables are separate from MeerKAT-pair pos/flux reports.
+  survey_xmatches:
+    - name: SUMSS_V21r_astrometry
+      input_profile: pybdsf_gaul
+      catalogue:
+        profile: sumss_v21r
+        path: "/Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/catalogues/summs212.fit"
+        hdu: 1
+      bands: [mfs]
+      radius: 10 arcsec
+      association_mode: all-candidates
+      coverage: unknown
   force_calibrate: false
   images_globs: []
   xmatch_pairs:

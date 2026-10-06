@@ -1,0 +1,47 @@
+# SUMSS-only MFS catalogue matching for an available CMC1 reference and four GPUs.
+# meerkat-ci --config configs/survey_xmatch/sumss_astrometry.yaml xm
+# Uses existing PyBDSF Gaussian rows; does not launch legacy MeerKAT-pair jobs.
+# Outputs are positional candidates with ambiguity flags, not automatic pos reports.
+# Set a fresh output directory before rerunning; survey files refuse overwrites.
+project_name: SUMSS-CMC1-GPU-MFS-astrometry
+path_vars:
+  commissioning: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning
+  observations: ${commissioning}/Obsevations
+  catalogues: ${commissioning}/catalogues
+paths:
+  sky_xmatches_dir: data/sumss_astrometry/processed/Sky-CrossMatches
+  reports_dir: data/sumss_astrometry/reports
+reference:
+  name: CMC1_1785941476_4kL
+  ms_paths: []
+  images:
+  - /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/1785941476_continuum_image_J2147-8132_IClean_PB.fits
+tests:
+- name: GPU_1784437450_32kL
+  images:
+  - ${observations}/1784437450_32kL/images/1784437450_continuum_image_J2147-8132_IClean_PB.fits
+- name: GPU_1784443274_8kL
+  images:
+  - ${observations}/1784443274_8kL/images/1784443274_continuum_image_J2147-8132_IClean_PB.fits
+- name: GPU_1785059546_4kL
+  images:
+  - ${observations}/1785059546_4kL/images/1785059546_continuum_image_J2147-8132_IClean_PB.fits
+- name: GPU_1785065779_1kL
+  images:
+  - ${observations}/1785065779_1kL/images/1785065779_continuum_image_J2147-8132_IClean_PB.fits
+extra:
+  xmatch_pairs: []
+  positions: []
+  flux: []
+  survey_xmatches:
+  - name: SUMSS_V21r_astrometry
+    input_profile: pybdsf_gaul
+    catalogue:
+      profile: sumss_v21r
+      path: ${catalogues}/summs212.fit
+      hdu: 1
+    bands:
+    - mfs
+    radius: 10 arcsec
+    association_mode: all-candidates
+    coverage: unknown

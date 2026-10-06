@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
-from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import Angle, SkyCoord, search_around_sky
 from astropy.io import fits
 from astropy.table import MaskedColumn, Table
 import astropy.units as u
@@ -164,8 +164,8 @@ def parse_angle(text: str) -> Angle:
         ang = Angle(text)
     except Exception as exc:  # pragma: no cover - defensive fallback
         raise ValueError(f"Could not parse angle '{text}': {exc}") from exc
-    if not np.isfinite(ang.arcsec):
-        raise ValueError(f"Non-finite maximum error parsed from '{text}'")
+    if not ang.isscalar or not np.isfinite(ang.arcsec) or ang.arcsec <= 0:
+        raise ValueError(f"Maximum error must be positive and finite: '{text}'")
     return ang
 
 
@@ -191,19 +191,22 @@ def _valid_coordinate_mask(
         finite &= ~ra_col.mask
     if isinstance(dec_col, MaskedColumn):
         finite &= ~dec_col.mask
-    return finite
+    ra = ra_qty.to_value(u.deg)
+    dec = dec_qty.to_value(u.deg)
+    return finite & (ra >= 0) & (ra <= 360) & (np.abs(dec) <= 90)
 
 
-def _extract_header_metadata(path: str, prefix: str) -> Dict[str, object]:
+def _extract_header_metadata(path: str, prefix: str, hdu=None) -> Dict[str, object]:
     """Extract FITS header keywords and prefix them for inclusion in the output."""
 
     meta: Dict[str, object] = {}
     with fits.open(path) as hdul:
-        header = None
-        for hdu in hdul:
-            if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
-                header = hdu.header
-                break
+        header = hdul[hdu].header if hdu is not None else None
+        if header is None:
+            for item in hdul:
+                if isinstance(item, (fits.BinTableHDU, fits.TableHDU)):
+                    header = item.header
+                    break
         if header is None:
             header = hdul[0].header
         for key, value in header.items():
@@ -220,11 +223,59 @@ def prepare_catalog(
     dec_col_name: str,
     frame: str,
     prefix: str,
+    *,
+    format: str | None = None,
+    hdu: int | str | None = None,
+    table_id: int | str | None = None,
+    coordinate_unit: str = "deg",
+    required_columns: Sequence[str] = (),
+    strict_table_selection: bool = False,
 ) -> PreparedCatalog:
     """Read a catalogue and prepare the subset suitable for position matching."""
 
     LOG.info("Reading catalogue %s", path)
-    table = Table.read(path, format="fits")
+    if path.lower().endswith((".crdownload", ".part", ".tmp")):
+        raise ValueError(f"Incomplete catalogue input: {path}")
+    format = format or ("votable" if path.lower().endswith((".xml", ".vot")) else "fits")
+    if format == "fits":
+        if table_id is not None:
+            raise ValueError("table_id applies only to VOTable inputs")
+        # Survey jobs require explicit multi-HDU selection; legacy jobs keep
+        # the original first-table convention.
+        with fits.open(path) as hdul:
+            if hdu is None:
+                tables = [i for i, item in enumerate(hdul)
+                          if isinstance(item, (fits.BinTableHDU, fits.TableHDU))]
+                if not tables or (strict_table_selection and len(tables) != 1):
+                    raise ValueError(f"Select an HDU for {path}: found {len(tables)} tables")
+                hdu = tables[0]
+            if not isinstance(hdul[hdu], (fits.BinTableHDU, fits.TableHDU)):
+                raise ValueError(f"Selected HDU is not a table: {path} [{hdu}]")
+        table = Table.read(path, format="fits", hdu=hdu)
+        header_meta = _extract_header_metadata(path, prefix, hdu)
+    elif format == "votable":
+        if hdu is not None:
+            raise ValueError("hdu applies only to FITS inputs")
+        from astropy.io.votable import parse
+        tables = list(parse(path).iter_tables())
+        if table_id is None:
+            if len(tables) != 1:
+                raise ValueError(f"Select table_id for {path}: found {len(tables)} tables")
+            selected = tables[0]
+        elif isinstance(table_id, int):
+            selected = tables[table_id]
+        else:
+            selected = next((t for t in tables if t.ID == table_id), None)
+            if selected is None:
+                raise ValueError(f"VOTable table_id {table_id!r} not found in {path}")
+        table = selected.to_table(use_names_over_ids=True)
+        header_meta = {}
+    else:
+        raise ValueError(f"Unsupported catalogue format: {format}")
+
+    for name in required_columns:
+        if name not in table.colnames:
+            raise KeyError(f"Column '{name}' not found in {path}")
 
     if ra_col_name not in table.colnames:
         raise KeyError(f"Column '{ra_col_name}' not found in {path}")
@@ -234,14 +285,19 @@ def prepare_catalog(
     ra_col = table[ra_col_name]
     dec_col = table[dec_col_name]
 
-    ra_qty = _column_to_quantity(ra_col, u.deg).to(u.deg)
-    dec_qty = _column_to_quantity(dec_col, u.deg).to(u.deg)
+    default_unit = u.Unit(coordinate_unit)
+    if not default_unit.is_equivalent(u.deg):
+        raise ValueError(f"Coordinate unit must be angular: {coordinate_unit}")
+    ra_qty = _column_to_quantity(ra_col, default_unit).to(u.deg)
+    dec_qty = _column_to_quantity(dec_col, default_unit).to(u.deg)
+    if ra_qty.ndim != 1 or dec_qty.ndim != 1:
+        raise ValueError(f"Coordinate columns must be one-dimensional in {path}")
 
     finite_mask = _valid_coordinate_mask(ra_qty, dec_qty, ra_col, dec_col)
     skipped = int((~finite_mask).sum())
     if skipped:
         LOG.warning(
-            "Skipping %d rows with non-finite coordinates in %s",
+            "Skipping %d rows with invalid or masked coordinates in %s",
             skipped,
             os.path.basename(path),
         )
@@ -252,7 +308,6 @@ def prepare_catalog(
     else:
         coords = SkyCoord([] * u.deg, [] * u.deg, frame=frame)
 
-    header_meta = _extract_header_metadata(path, prefix)
     return PreparedCatalog(
         table=table,
         coords=coords,
@@ -329,7 +384,7 @@ def _one_to_many(
     if coords1.size == 0 or coords2.size == 0:
         return []
 
-    idx1, idx2, sep2d, _ = coords1.search_around_sky(coords2, max_sep)
+    idx1, idx2, sep2d, _ = search_around_sky(coords1, coords2, max_sep)
     results: List[Tuple[int, int, Angle]] = []
     for i1, i2, sep in zip(idx1, idx2, sep2d):
         if not np.isfinite(sep.to_value(u.arcsec)):
@@ -342,6 +397,8 @@ def build_output_table(
     table1: Table,
     table2: Table,
     matches: List[Tuple[int, int, Angle]],
+    *,
+    enrich: bool = True,
 ) -> Table:
     """Construct the combined match table with suffixed columns and separation."""
 
@@ -364,10 +421,15 @@ def build_output_table(
 
     sep_arcsec = np.array([m[2].to_value(u.arcsec) for m in matches], dtype=float)
     output["sep_arcsec"] = sep_arcsec
+    output["sep_arcsec"].unit = u.arcsec
+    output["input_row_1"] = np.array([m[0] for m in matches], dtype=np.int64)
+    output["input_row_2"] = np.array([m[1] for m in matches], dtype=np.int64)
 
     # Normalize standard PyBDSF measurements while retaining all original fields.
-    from .uncertainty import enrich_matches
-    return enrich_matches(output)
+    if enrich:
+        from .uncertainty import enrich_matches
+        return enrich_matches(output)
+    return output
 
 
 def cross_match_catalogues(
@@ -375,8 +437,13 @@ def cross_match_catalogues(
     cat2: PreparedCatalog,
     max_error: Angle,
     one_to_many: bool,
+    *,
+    enrich: bool = True,
 ) -> Tuple[Table, List[Tuple[int, int, Angle]]]:
     """Perform the cross-match and build the output table."""
+
+    if not max_error.isscalar or not np.isfinite(max_error.arcsec) or max_error.arcsec <= 0:
+        raise ValueError("Matching radius must be positive and finite")
 
     LOG.info(
         "Matching %d (valid %d) sources to %d (valid %d) within %.3f arcsec",
@@ -392,7 +459,15 @@ def cross_match_catalogues(
     else:
         matches = _greedy_one_to_one(cat1.coords, cat2.coords, cat1.valid_indices, cat2.valid_indices, max_error)
 
-    match_table = build_output_table(cat1.table, cat2.table, matches)
+    candidates = (matches if one_to_many else _one_to_many(
+        cat1.coords, cat2.coords, cat1.valid_indices, cat2.valid_indices, max_error))
+    n1 = np.bincount([m[0] for m in candidates], minlength=len(cat1.table))
+    n2 = np.bincount([m[1] for m in candidates], minlength=len(cat2.table))
+    match_table = build_output_table(cat1.table, cat2.table, matches, enrich=enrich)
+    match_table["candidate_count_1"] = np.array([n1[m[0]] for m in matches], dtype=np.int64)
+    match_table["candidate_count_2"] = np.array([n2[m[1]] for m in matches], dtype=np.int64)
+    match_table["ambiguous"] = np.array([
+        n1[m[0]] > 1 or n2[m[1]] > 1 for m in matches], dtype=bool)
 
     # Merge metadata while preserving existing meta from subtables.
     match_table.meta.update(cat1.table.meta)
@@ -401,6 +476,17 @@ def cross_match_catalogues(
     match_table.meta.update(cat2.header_meta)
     match_table.meta["HIERARCH XMATCH_MAX_ERROR_ARCSEC"] = float(max_error.to_value(u.arcsec))
     match_table.meta["HIERARCH XMATCH_MODE"] = "one-to-many" if one_to_many else "one-to-one"
+    for side, cat in ((1, cat1), (2, cat2)):
+        matched = {m[side - 1] for m in matches}
+        ambiguous_rows = {m[side - 1] for m in candidates
+                          if n1[m[0]] > 1 or n2[m[1]] > 1}
+        for key, value in {
+            "INPUT": len(cat.table), "VALID": len(cat.valid_indices),
+            "INVALID": cat.skipped, "MATCHED": len(matched),
+            "UNMATCHED": len(cat.valid_indices) - len(matched),
+            "AMBIGUOUS": len(ambiguous_rows),
+        }.items():
+            match_table.meta[f"HIERARCH XM{side}_{key}"] = value
 
     return match_table, matches
 
@@ -467,12 +553,12 @@ def sanitize_fits_meta(tab: Table) -> Table:
     return tab
 
 
-def write_output(table: Table, path: str) -> None:
+def write_output(table: Table, path: str, *, overwrite: bool = True) -> None:
     """Write the matched table to ``path`` in FITS format."""
 
     LOG.info("Writing %d matched rows to %s", len(table), path)
     table = sanitize_fits_meta(table)
-    table.write(path, format="fits", overwrite=True)
+    table.write(path, format="fits", overwrite=overwrite)
 
 
 def print_summary(
@@ -480,6 +566,7 @@ def print_summary(
     cat1: PreparedCatalog,
     cat2: PreparedCatalog,
     max_error: Angle,
+    match_table: Table | None = None,
 ) -> None:
     """Print a concise summary of matching results to stdout."""
 
@@ -487,13 +574,18 @@ def print_summary(
     matched2 = {m[1] for m in matches}
     total1 = len(cat1.table)
     total2 = len(cat2.table)
-    unmatched1 = total1 - len(matched1)
-    unmatched2 = total2 - len(matched2)
+    unmatched1 = len(cat1.valid_indices) - len(matched1)
+    unmatched2 = len(cat2.valid_indices) - len(matched2)
 
     summary = (
-        f"Matches: {len(matches)} | cat1: {total1} (unmatched {unmatched1}) | "
-        f"cat2: {total2} (unmatched {unmatched2}) | max_error={max_error.to_string(unit=u.arcsec)}"
+        f"Matches: {len(matches)} | cat1: input={total1} valid={len(cat1.valid_indices)} "
+        f"invalid={cat1.skipped} matched={len(matched1)} unmatched={unmatched1} | "
+        f"cat2: input={total2} valid={len(cat2.valid_indices)} invalid={cat2.skipped} "
+        f"matched={len(matched2)} unmatched={unmatched2} | max_error={max_error.to_string(unit=u.arcsec)}"
     )
+    if match_table is not None:
+        summary += (f" | ambiguous rows: cat1={match_table.meta['HIERARCH XM1_AMBIGUOUS']} "
+                    f"cat2={match_table.meta['HIERARCH XM2_AMBIGUOUS']}")
     print(summary)
 
 
@@ -557,7 +649,7 @@ def run_self_test() -> int:
         cat2_prep = prepare_catalog(args.input2, args.ra_col_2, args.dec_col_2, args.coord_frame, "T2")
         table, matches = cross_match_catalogues(cat1_prep, cat2_prep, max_error, args.one_to_many)
         write_output(table, args.output)
-        print_summary(matches, cat1_prep, cat2_prep, max_error)
+        print_summary(matches, cat1_prep, cat2_prep, max_error, table)
 
         # Demonstrate one-to-many mode as well.
         LOG.info("Demonstrating one-to-many mode as well:")
@@ -565,7 +657,7 @@ def run_self_test() -> int:
         table_many, matches_many = cross_match_catalogues(cat1_prep, cat2_prep, max_error_many, True)
         out2_final, _, _ = prepare_output_directory(out2)
         write_output(table_many, out2_final)
-        print_summary(matches_many, cat1_prep, cat2_prep, max_error_many)
+        print_summary(matches_many, cat1_prep, cat2_prep, max_error_many, table_many)
 
         LOG.info("Self-test outputs written to %s", cross_dir)
 
@@ -616,7 +708,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 1
             continue
 
-        print_summary(matches, cat1, cat2, max_error)
+        print_summary(matches, cat1, cat2, max_error, match_table)
         LOG.info("Outputs written to %s (log: %s)", output_dir, log_path)
 
     return exit_code

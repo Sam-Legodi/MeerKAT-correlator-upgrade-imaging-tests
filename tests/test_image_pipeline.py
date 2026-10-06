@@ -110,7 +110,7 @@ def test_images_command_runs_only_image_steps_in_order(monkeypatch, tmp_path: Pa
         cli,
         "wire_image_pipeline",
         lambda config: SimpleNamespace(
-            products=(), xmatch_pairs=(), positions=(), flux=()
+            products=(), xmatch_pairs=(), positions=(), flux=(), survey_xmatch_jobs=()
         ),
     )
     monkeypatch.setattr(

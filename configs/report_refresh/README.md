@@ -203,3 +203,21 @@ PDFs alone are not sufficient numerical inputs for a rerun of the image report.
 checks readability/schema/field selection, not the truth of SDP correction
 provenance or full spectral comparability. Remote MS checks cannot be completed
 on this local machine until the actual server paths and files are supplied.
+
+## SUMSS astrometry candidates
+
+Each of the eight imaging configs includes two explicit SUMSS V2.1r survey jobs:
+CMC1 MFS vs SUMSS and GPU MFS vs SUMSS, both within 10 arcseconds. Explicit MFS
+selection keeps low/high images out of this first catalogue comparison. Existing
+CMC1–GPU pairs and their position/flux/report settings are retained. The global
+`xmatch.max_sep_arcsec` value is numeric `5.0`; the wrapper supplies its angular
+unit when launching the legacy matcher.
+
+Running `xm` creates separate `*_mfs_X_SUMSS_V21r.fits` tables and JSON diagnostics
+under each config's `Sky-CrossMatches`. These are catalogue astrometry candidates,
+with coordinate provenance and ambiguity flags. They are not automatically fed
+into `pos`, `flux`, or the consolidated comparison report: those routines expect
+paired MeerKAT inputs. Use a fresh output location on reruns; survey results
+refuse overwrites. For independent SUMSS matching without rebuilding legacy pair
+matches, use `configs/survey_xmatch/sumss_astrometry.yaml` as described in the
+[configuration guide](../../docs/local_survey_crossmatching.md#sumss-astrometry-configurations).

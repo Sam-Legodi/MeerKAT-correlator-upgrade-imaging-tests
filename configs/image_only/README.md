@@ -42,3 +42,39 @@ Flux analysis runs automatically only when a test has separate low-band,
 high-band and MFS match tables. The extracted low/high products are explicitly
 non-PB, while the delivered MFS comparison images are PB-corrected; downstream
 interpretation must preserve that distinction.
+
+## SUMSS catalogue astrometry
+
+The paired `l_wide.yaml`, `l_n10732k.yaml`, `u.yaml` and `s4.yaml` configs now
+include independent SUMSS V2.1r matches for the CMC1 reference and every GPU test,
+using existing MFS catalogues and a 10 arcsecond radius. `xm` resolves these jobs
+without imaging/source finding. Low/high-band matching remains opt-in. Gaussian
+components, parent IDs, original coordinate units and ambiguity flags are retained.
+
+For a SUMSS-only run with an available CMC1 reference and all four wide-L GPUs:
+
+```bash
+meerkat-ci --config configs/survey_xmatch/sumss_astrometry.yaml xm
+```
+
+That config writes separate results under
+`data/sumss_astrometry/processed/Sky-CrossMatches`, without executing the legacy
+CMC1–GPU pair jobs. Choose a fresh output directory for subsequent runs. The
+paired configs retain their configured references; a missing reference catalogue
+is reported as a failure rather than replaced with a different observation.
+
+The SUMSS tables provide MeerKAT `RA_1/DEC_1`, SUMSS `_RAJ2000_2/_DEJ2000_2`,
+`sep_arcsec`, stable input row IDs and ambiguity flags for absolute catalogue
+astrometry. SUMSS uses FK5 J2000, while MeerKAT uses ICRS; signed east/north offsets
+must be evaluated in a common frame, with an explicit sign convention. These
+survey tables are not inputs to the existing `pos` reports, which require two
+MeerKAT image/catalogue schemas. See the
+[SUMSS astrometry configuration guide](../../docs/local_survey_crossmatching.md#sumss-astrometry-configurations)
+for the scope and association qualifications.
+
+Read-only preflight on 6 October 2026 found missing existing MFS catalogues for
+CMC1 1786962370 (`l_wide`), GPU 1783266356 (`l_n10732k`), CMC1 1785990374 and
+both GPU 1784017048/1784022889 (`u`), and CMC1 1787034555 (`s4`). Their configured
+SUMSS jobs will fail clearly until those catalogues are supplied. The dedicated
+SUMSS-only configuration and all eight report-refresh MFS pairs have readable
+catalogue inputs; no missing catalogue was regenerated during this config patch.

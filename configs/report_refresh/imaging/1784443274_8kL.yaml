@@ -46,8 +46,36 @@ pybdsf:
   adaptive_rms_box: false
   overwrite: false
 xmatch:
-  max_sep_arcsec: 5.0 arcsec
+  max_sep_arcsec: 5.0
 extra:
+  # Independent MFS CMC1/GPU vs SUMSS; not fed into MeerKAT-pair pos/flux reports.
+  survey_xmatch_jobs:
+  - input1:
+      profile: pybdsf_gaul
+      path: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/pybdsf.results/1785941476_continuum_image_J2147-8132_IClean_PB/1785941476_continuum_image_J2147-8132_IClean_PB-source-cat.fits
+      image: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/1785941476_continuum_image_J2147-8132_IClean_PB.fits
+      hdu: 1
+    input2:
+      profile: sumss_v21r
+      path: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/catalogues/summs212.fit
+      hdu: 1
+    output: ${output_root}/processed/Sky-CrossMatches/CMC1_1785941476_4kL_mfs_X_SUMSS_V21r.fits
+    radius: 10 arcsec
+    association_mode: all-candidates
+    coverage: unknown
+  - input1:
+      profile: pybdsf_gaul
+      path: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1784443274_8kL/images/pybdsf.results/1784443274_continuum_image_J2147-8132_IClean_PB/1784443274_continuum_image_J2147-8132_IClean_PB-source-cat.fits
+      image: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1784443274_8kL/images/1784443274_continuum_image_J2147-8132_IClean_PB.fits
+      hdu: 1
+    input2:
+      profile: sumss_v21r
+      path: /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/catalogues/summs212.fit
+      hdu: 1
+    output: ${output_root}/processed/Sky-CrossMatches/CMC2_1784443274_8kL_mfs_X_SUMSS_V21r.fits
+    radius: 10 arcsec
+    association_mode: all-candidates
+    coverage: unknown
   force_calibrate: false
   images_globs: []
   uncertainty:

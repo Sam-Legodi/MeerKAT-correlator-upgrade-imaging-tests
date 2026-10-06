@@ -464,6 +464,13 @@ What happens:
   `--max-error` and related options.
 * Without an explicit `output`, the wrapper creates one under `data/processed/Sky-CrossMatches/` with a sensible name.
 
+* Optional `extra.survey_xmatch_jobs` and `extra.survey_xmatches` add independent
+  local SUMSS/RACS associations with per-input profiles, table selection,
+  radii, ambiguity flags, provenance and coverage diagnostics. They are retained
+  through image-pipeline wiring and excluded from automatic MeerKAT flux/position
+  analyses. See [local survey matching](docs/local_survey_crossmatching.md) and the
+  [opt-in MFS configuration](configs/survey_xmatch/local_mfs.yaml).
+
 Verify:
 
 * `data/processed/Sky-CrossMatches/*.fits` exists and has match columns.

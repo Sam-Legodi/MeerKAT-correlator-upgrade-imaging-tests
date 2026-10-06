@@ -138,6 +138,7 @@ def main(argv=None):
             "[IMAGE PIPELINE] Wired "
             f"{len(plan.products)} image product(s), "
             f"{len(plan.xmatch_pairs)} cross-match pair(s), "
+            f"{len(plan.survey_xmatch_jobs)} survey cross-match job(s), "
             f"{len(plan.positions)} position analysis input(s), and "
             f"{len(plan.flux)} flux analysis input(s)."
         )
