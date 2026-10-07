@@ -1,8 +1,6 @@
 # MeerKAT Correlator Upgrade — Imaging Tests
 
-Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT reference and test observations for correlator upgrade imaging verification. This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
-Reproducible workflows to download (manually), calibrate (if needed), image, source-find, cross-match, and analyze MeerKAT **reference** and **test** observations for correlator upgrade imaging verification.
-This repository standardizes the end-to-end process and makes it easy to share results with collaborators.
+Config-driven workflows for MeerKAT CMC1 reference and GPU/CMC2 test observations: visibility QA, optional CASA calibration/imaging, SDP image preparation, PyBDSF source finding, catalogue matching, astrometry, flux and sensitivity comparisons, and draft DOCX/PDF reports. Start with fresh visibilities and the corresponding SDP archive images, observation metadata and calibration reports; reuse existing products when refreshing results.
 
 ---
 
@@ -13,6 +11,7 @@ This repository standardizes the end-to-end process and makes it easy to share r
 * [Prerequisites](#prerequisites)
 * [Installation](#installation)
 * [Manual Data Download (Step 1)](#manual-data-download-step-1)
+* [Fresh dataset: required workflow](#fresh-dataset-required-workflow)
 * [How to Run](#how-to-run)
 
   * [1) Install the project locally (once per machine)](#1-install-the-project-locally-once-per-machine)
@@ -21,17 +20,24 @@ This repository standardizes the end-to-end process and makes it easy to share r
     * [3.1 Visibility QA (Step 2)](#31-visibility-qa-step-2)
     * [3.2 Calibrate & Image with CASA (Step 3)](#32-calibrate--image-with-casa-step-3)
     * [3.3 Low/high cuboid slices (Step 4)](#33-lowhigh-cuboid-slices-step-4)
+    * [Sensitivity metadata](#sensitivity-metadata-before-flux-and-report)
     * [3.4 Source finding with PyBDSF (Step 5)](#34-source-finding-with-pybdsf-step-5)
     * [3.5 Cross-matching catalogues (Step 6)](#35-cross-matching-catalogues-step-6)
     * [3.6 Astrometry (positions) analysis (Step 7a)](#36-astrometry-positions-analysis-step-7a)
     * [3.7 Flux analysis (Step 7b)](#37-flux-analysis-step-7b)
     * [3.8 Consolidated verification report (Step 8)](#38-consolidated-verification-report-step-8)
-  * [4) Run the whole pipeline (hands-off)](#4-run-the-whole-pipeline-hands-off)
+  * [4) Run grouped pipeline stages](#4-run-grouped-pipeline-stages)
   * [5) Where things go (default)](#5-where-things-go-default)
   * [6) Quick verification checklist](#6-quick-verification-checklist)
   * [7) Common gotchas (and fixes)](#7-common-gotchas-and-fixes)
-  * [8) Commit your config and results?](#8-commit-your-config-and-results)
+  * [8) Commit your config and results?](#8-for-dev-purposes-commit-your-config-and-results)
   * [TL;DR sequence](#tldr-sequence)
+* [Refresh reports from existing products](#refresh-reports-from-existing-products)
+* [Detailed behaviour and advanced workflows](#detailed-behaviour-and-advanced-workflows)
+  * [Calibration controls](#calibration-application-and-optional-imaging)
+  * [Paired CASA astrometry imaging](#paired-cmc1gpucmc2-astrometry-imaging-casa-6)
+  * [Remote sensitivity and noise reports](#remote-sensitivity-and-existing-image-noise-reports)
+  * [Sensitivity reuse contract](#sensitivity-artifact-and-reuse-contract)
 * [Reproducibility & Provenance](#reproducibility--provenance)
 * [Examples & Tests](#examples--tests)
 * [Legacy Scripts](#legacy-scripts)
@@ -43,15 +49,9 @@ This repository standardizes the end-to-end process and makes it easy to share r
 
 ## Overview
 
-**Goal:** Compare test observations against a reference by:
+**Goal:** Compare like-for-like reference/test datasets using corrected-visibility diagnostics, image astrometry and flux consistency, measured image RMS, and product-specific theoretical sensitivity. The final consolidated report combines available numerical evidence with contextual SDP calibration reports and image diagnostics. Missing evidence remains explicitly unassessed.
 
-1. Inspecting corrected visibilities,
-2. Calibrating and imaging any uncorrected fields in CASA,
-3. Extracting configured low/high planes from MFImage cuboids when needed,
-4. Running PyBDSF for source catalogues,
-5. Cross-matching test vs reference catalogues,
-6. Analyzing astrometric offsets and flux consistency, and
-7. Producing ready-to-share figures, per-analysis DOCX files and a consolidated verification report.
+The recommended order is **prepare inputs → calibrate if required → corrected-visibility QA → prepare images → sensitivity → source finding → matching → astrometry → flux → consolidated report**. Calibration and image creation are conditional; sensitivity must precede the flux/report stages when those stages consume sensitivity JSON. See the [fresh-dataset workflow](#fresh-dataset-required-workflow) for executable routes and their configuration requirements.
 
 ---
 
@@ -70,8 +70,7 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │  ├─ interim/                  # intermediate calibration/QA outputs
 │  ├─ processed/                # final images, catalogues, xmatches
 │  └─ reports/                  # ready-to-share DOCX/PDF/PNG artefacts
-├─ examples/
-│  └─ tiny-demo/                # minimal runnable demo dataset
+├─ examples/                   # space for example datasets
 ├─ legacy_scripts/              # preserved historical utilities (read-only)
 │  ├─ corr_imanalysis.py
 │  ├─ image-analyser.py
@@ -95,6 +94,9 @@ MeerKAT-correlator-upgrade-imaging-tests/
 │     ├─ standalone_xxyy_solve.py # packaged CASA calibration script
 │     ├─ tclean_two_bands.py    # packaged CASA imaging script
 │     ├─ vis_amp_analyze.py     # visibility QA module
+│     ├─ sensitivity_workflow.py # selected-MS sensitivity JSON and noise workflow
+│     ├─ survey_xmatch.py        # local SUMSS/RACS catalogue associations
+│     ├─ output_audit.py         # final per-step output inventory
 │     ├─ verification_report.py # consolidated image-domain verification report
 │     ├─ xmatch_pybdsf.py       # catalogue matching module
 │     └─ steps/
@@ -202,20 +204,105 @@ If you maintain your own builds, ensure both packages are on the environment `PY
 
 ## Manual Data Download (Step 1)
 
-From the SARAO archive, request **corrected visibilities** by enabling `mvftoms` with `--applyall`. Download the following for both **reference** and **test** observations:
+Collect both the CMC1 reference and GPU/CMC2 test datasets. Keep observation/epoch IDs, field names, spectral setup, scans, channel selections, time averaging, flags, calibration history and image weighting with the files.
 
-* Corrected visibility **MeasurementSets**: 
+* **Visibilities:** complete MS/MMS directories with their subtables. Prefer SDP-corrected exports when evaluating the SDP products. Record whether calibrated values reside in `DATA` or `CORRECTED_DATA`; a filename alone is insufficient.
+* **Images:** the SDP MFS continuum FITS images, non-PB MFImage cuboids and available low/high products. Retain PB-corrected and corresponding non-PB images where available; compare matching PB states.
+* **Context:** observation metadata, SDP calibration-report PDFs and any existing `mfimage_frequency_assessment` diagnostic figures. These provide provenance and visual context; calibration PDFs do not replace numerical visibility QA.
 
-e.g: 
+For example, an SDP export with calibration applied (only the target and gaincal have valid SDP corrections) and visibilities averaged to 1k channels:
+
 ```bash
-mvftoms.py 1757723806_sdp_l0.full.rdb -f --flags 'static, cam, data_lost, ingest_rfi, predicted_rfi, cal_rfi, postproc' --chanbin 4 --applycal 'all' -o 1757723806_sdp_l0.full.SDP_Allcorrected.ms
+mvftoms.py 1784022889_sdp_l0.full.8kU.rdb -p "HH,VV" --applycal "all" --target "J1619-8418" --flags "static,cam,data_lost,ingest_rfi" --chanbin 8 -o 1784022889_J1619.8kU.ms && \
+mvftoms.py 1784022889_sdp_l0.full.8kU.rdb -p "HH,VV" --applycal "all" --target "J2147-8132" --flags "static,cam,data_lost,ingest_rfi" --chanbin 8 -o 1784022889_J2147.8kU.ms
 ```
 
-* **PB-corrected** continuum image(s) -- if comparing PB corrected images.
-* **Multifrequency** image cubes (the default SARAO archive/Obit versions)
+Record the actual export options and resulting column contents in your dataset notes, for example `data/raw/README.md`. Download/export remains manual. If visibilities are uncorrected, follow the calibration branch below before claiming corrected-data QA.
 
-Document the request IDs, dates, and resulting file paths in `data/raw/README.md`.
-This step remains manual due to authentication and archive UX.
+---
+
+## Fresh dataset: required workflow
+
+Run from the repository root in the installed Python environment, preferably inside `tmux` or `screen`. Use one reference/test pair per consolidated assessment; the report selects the first configured test and `noise-report` requires exactly one pair. Keep target and gain-calibrator visibility comparisons separate.
+
+| Order | Action | Command / condition |
+| --- | --- | --- |
+| 1 | Collect visibilities, SDP images, metadata and calibration reports; configure paths and provenance | Manual preparation and YAML editing |
+| 2 | Calibrate uncorrected visibilities, optionally make CASA images | `cal`; skip calibration for verified SDP-corrected data |
+| 3 | Assess corrected reference/test visibilities | `vis` after calibration, or directly for corrected exports |
+| 4 | Select existing SDP/CASA images and create missing low/high products | `low_high_slice` only when cuboid extraction is needed |
+| 5 | Calculate product-specific sensitivity from the final visibility selections | `sensitivity` |
+| 6 | Generate/reuse PyBDSF catalogues | `src` |
+| 7 | Match reference/test catalogues, optionally local SUMSS/RACS catalogues | `xm` |
+| 8 | Generate detailed astrometry report | `pos` |
+| 9 | Generate detailed flux/noise report | `flux` |
+| 10 | Generate consolidated verification report | `report`; CLI exports newly written DOCX files to PDF at each invocation's end |
+
+`pos` and `flux` both consume matched tables; neither requires the other's DOCX. `report` consumes configured tables, images and numerical evidence, rather than combining those detailed DOCX files.
+
+### Choose calibration and imaging independently
+
+| Visibility / image situation | `extra.force_calibrate` | `casa.imaging_enabled` | Action |
+| --- | --- | --- | --- |
+| Already SDP corrected; use archive images | `false` | `false` | Skip `cal`; run `vis` and analyse supplied images |
+| Already corrected; create CASA images | `false` | `true` | Run `cal` for imaging only, then `vis` |
+| Uncorrected; calibrate and create CASA images | `true` | `true` | Run `cal`, then corrected-data `vis` |
+| Uncorrected; calibrate without creating images | `true` | `false` | Run `cal --no-imaging`, then `vis`; analyse archive images with their own documented SDP selections |
+
+```yaml
+extra:
+  force_calibrate: false  # true only when calibration is required
+casa:
+  imaging_enabled: false # true when requesting CASA imaging
+  datacolumn: data       # corrected SDP values exported into DATA
+```
+
+Use `casa.datacolumn: corrected` for imaging calibrated values in `CORRECTED_DATA`. This setting controls imaging, **not `vis`**: visibility QA prefers `CORRECTED_DATA`, then `DATA`, then `MODEL_DATA` and analyses all MS rows. Confirm that the preferred column actually contains calibrated observations. Use field-specific MS exports or the underlying visibility module's `--field` option for multi-field inputs. See [report-refresh visibility guidance](configs/report_refresh/README.md#remote-visibility-preparation-and-commands).
+
+`force_calibrate` applies to all configured reference/test MSs in that invocation. For a mixture of corrected and uncorrected MSs, calibrate only the uncorrected subset with a separate config, then assemble the comparison config. Calibration modifies those MSs and may change flags. Verify calibrator fields and solve settings first. New local calibration does not establish the provenance of pre-existing SDP images; sensitivity must use the visibility selections underlying each actual image.
+
+**Disabling calibration does not disable imaging.** `--no-imaging` overrides the imaging setting for `cal`/`all`; it does not suppress requested calibration or downstream image analysis.
+
+### Recommended launch sequence
+
+Use a dataset config for MS preparation/QA, then a noise-workflow config for the final supplied images:
+
+```bash
+tmux new -s mk-analysis
+# Edit dataset.yaml from configs/example_local.yaml.
+# Only for uncorrected inputs or when requesting new CASA images:
+meerkat-ci cal --config dataset.yaml
+# After correction; skip the previous command for corrected archive inputs:
+meerkat-ci vis --config dataset.yaml
+# Only if missing low/high archive images need cuboid extraction:
+meerkat-ci low_high_slice --config dataset.yaml
+
+# Edit a separate config from configs/noise_report/l_band.yaml (or s4.yaml).
+# Supply the final mfs/low/high image paths and their exact MS selections.
+meerkat-ci sensitivity --config noise.yaml
+meerkat-ci noise-report --config noise.yaml --reuse-sensitivity
+# Alternative to the previous two commands: noise-report generates sensitivity itself.
+# meerkat-ci noise-report --config noise.yaml
+```
+
+`noise-report` runs **sensitivity → src → xm → pos → flux → report**, omitting sensitivity with `--reuse-sensitivity`. It schedules no calibration, imaging or slicing. `extra.sensitivity.products` supplies its reference/test associations and it derives downstream handoffs; leave `extra.xmatch_pairs`, `extra.positions` and `extra.flux` empty in this config. Include products named `mfs`, `low` and `high` for the detailed three-band flux report. Its automatic handoffs exist only for that invocation, so use a separately wired analysis config for individual report commands later.
+
+For archive products, supply explicit field, data column, scans and native channel selections recovered from observation/imaging metadata. A generic archive metadata file or calibration PDF is not a completed paired-CASA manifest. Use `manifest` only for the repository's completed paired-astrometry manifest for that exact image. Never assume an image used every MS scan/channel from its filename. Missing selections produce unavailable sensitivity with a reason.
+
+Carry visibility evidence into `noise.yaml` or your analysis config:
+
+```yaml
+extra:
+  verification_report:
+    reference_visibility_results: /path/to/interim/reference_ms
+    test_visibility_results: /path/to/interim/test_ms
+    calibration_status: Not assessed
+    calibration_finding: Calibration PDFs supplied; visual review pending.
+    image_status: Not assessed
+    image_finding: Image diagnostic review pending.
+```
+
+Set findings/statuses to the actual review outcome. The consolidated report discovers test-observation calibration PDFs at `<test-image-parent>/../calreports/*.pdf` and diagnostic figures at `<test-image-parent>/../mfimage_frequency_assessment/`. Preserve that layout when transferring archive images or contextual products. Supplying those figures does not itself certify calibration quality. Explicit visibility-result paths are useful when QA and images live on different machines; copy numerical CSV/JSON products and figures, not just PDFs.
 
 ---
 
@@ -245,6 +332,8 @@ Edit `config.yaml` (see contents of `configs/example*_local.yaml config.yaml`):
   create missing low/high products; optional `low_image` and `high_image`
   paths reuse existing products
 * `frequency_ranges` -> the shared low/high ranges used by CASA and slicing
+* `extra.sensitivity` -> per-image MS/field/scan/channel associations and the sensitivity JSON output (required for the new noise workflow)
+* `extra.verification_report` -> numerical visibility-result directories and recorded visual findings
 * `extra.xmatch_pairs`, `extra.positions`, `extra.flux` -> wire the files your wrappers need to perform cross-matching (cross-matching FITS catalogue pairs), and also cross-matched FITS catalogues for astrometry and flux analysis.
 * `paths.*` -> where outputs will be written (defaults live under `data/` and are auto-created)
 
@@ -431,6 +520,18 @@ What happens:
 Run this step before `src`. With `add_to_source_finding: true`, the resolved
 low/high files are automatically added to the PyBDSF image list.
 
+#### Sensitivity metadata (before flux and report)
+
+```bash
+meerkat-ci sensitivity --config noise.yaml
+```
+
+This standalone step writes `extra.sensitivity.output_json` from the configured per-product reference/test MS selections. It requires python-casacore, but neither PyBDSF nor existing FITS images are required to calculate it. Prefer generating it after calibration/flagging and after selecting the final images so their identities are recorded. Recalculate after visibility, flag, selection or image changes.
+
+The JSON records theoretical natural-weight Stokes-I RMS, usable parallel-hand exposure, antenna participation, bandwidth/time, band/SEFD assumptions, provenance and unavailable-result reasons. Flux and consolidated reports consume that artifact without reopening MSs. Theoretical sensitivity and measured annular image RMS are different quantities; imaging weights, taper, confusion and PB corrections are not silently applied. See [the sensitivity contract](#sensitivity-artifact-and-reuse-contract) for exact selection and reuse requirements.
+
+For individually launched `flux`/`report`, configure explicit normal handoffs together with the same `extra.sensitivity.products` and JSON path. The older `extra.flux.thermal_noise` route remains available, but must not conflict with configured sensitivity JSON.
+
 #### 3.4 Source finding with PyBDSF (Step 5)
 
 ```bash
@@ -600,8 +701,11 @@ What happens:
 * Reads the MFS, low-band and high-band entries already wired through
   `extra.positions` and the catalogue pairs in `extra.xmatch_pairs`.
 * Enforces like-for-like primary-beam correction states.
-* Scores positional p95, robust median integrated-flux error and the
-  measured/CMC1 robust-RMS ratio against the configured verification policy.
+* Assesses positional offsets/p95, median integrated-flux parity and the
+  measured/CMC1-scaled RMS comparison at 95% confidence. Missing decision
+  uncertainty remains `Not assessed`.
+* Consumes configured sensitivity JSON for product-specific noise comparisons;
+  theoretical thermal ratios are diagnostic and add no acceptance threshold.
 * Adds the available calibration-report PDF inventory and image-diagnostic
   figures, while marking visibility-only and per-scan checks as unassessed when
   those inputs are unavailable.
@@ -609,7 +713,8 @@ What happens:
 Outputs:
 
 * `data/reports/imaging_verification/draft_<observation>_imaging_verification.docx`
-* A matching `_metrics.json` sidecar and acceptance-metrics figure.
+* A matching PDF exported at CLI finalization, `_metrics.json` sidecar and
+  acceptance-metrics figure. Detailed `pos`/`flux` reports are separate outputs.
 
 Optional observation-specific visual findings can be supplied under
 `extra.verification_report` using `calibration_status`, `calibration_finding`,
@@ -617,7 +722,17 @@ Optional observation-specific visual findings can be supplied under
 
 ---
 
-### 4) Run the whole pipeline (hands-off)
+### 4) Run grouped pipeline stages
+
+Choose the grouped command by its actual stage list:
+
+| Command | Stages | Configuration behaviour |
+| --- | --- | --- |
+| `noise-report` | sensitivity → src → xm → pos → flux → report | Derives handoffs from sensitivity products; `--reuse-sensitivity` omits generation |
+| `images` | low_high_slice → src → xm → pos → flux → report | Automatically wires image products and catalogue/analysis handoffs |
+| `all` | vis → cal → low_high_slice → src → xm → pos → flux → report | Uses explicit configured downstream handoffs |
+
+**Neither `all` nor `images` automatically runs standalone sensitivity.** Generate JSON separately and configure its handoff when required. `all` runs `vis` before `cal`, so use the staged fresh-dataset sequence for initially uncorrected MSs when the final QA must assess corrected data. If calibration/flagging changes the inputs, regenerate sensitivity afterwards. `all` does not automatically discover new CASA image filenames: update image paths and downstream handoffs to the actual outputs.
 
 To run only the image-domain stages, use `images`:
 
@@ -665,7 +780,7 @@ Order:
 7. `flux`
 8. `report`
 
-Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
+Each sub-step logs its commands. Optional unconfigured work may skip; invalid or missing requested inputs can fail and stop downstream stages. Review the audit rather than assuming every stage ran.
 
 Each requested step audits its combined stdout/stderr log and records succeeded,
 failed, and not-run inputs. The CLI prints these summaries together once at the
@@ -692,7 +807,8 @@ command still stops before downstream steps when the completed step is failed.
 * Interim QA and CSVs: `data/interim/<msbase>/...`
 * Processed products (images, catalogues, cross-matches): `data/processed/...`
   * Cross-matches specifically: `data/processed/Sky-CrossMatches/`
-* Reports (DOCX, figures): `data/reports/...`
+* Sensitivity JSON: `extra.sensitivity.output_json` (choose an explicit path)
+* Reports (DOCX/PDF, metrics JSON, figures): `data/reports/...`
   * Every pipeline-generated DOCX basename starts with `draft_`.
   * Per-step pipeline logs and audits: `data/reports/pipeline_audits/*.log`
 
@@ -705,10 +821,12 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 * After `vis`: CSVs and PNGs under `data/interim/*/`
 * After `cal`: CASA images in each MS `images/` directory with FITS and QA exports
 * After `low_high_slice`: non-PB `_lowband.fits` and `_highband.fits` beside each cuboid
+* After `sensitivity`: JSON with the expected products, selections and per-side status/reasons
 * After `src`: PyBDSF catalogues (FITS) near images or in `data/processed/`
 * After `xm`: matched FITS tables in `data/processed/Sky-CrossMatches/`
 * After `pos` and `flux`: `draft_*.docx` files plus plots under `data/reports/`
-* After `report`: a five-page draft verification DOCX, JSON metrics sidecar and acceptance figure under `data/reports/imaging_verification/`
+* After `report`: draft verification DOCX/PDF, JSON metrics sidecar and acceptance figure under `data/reports/imaging_verification/`; page count varies with available evidence
+* After every CLI run: inspect the final per-step input/output audit and `produced_reports.log` for absolute report paths
 
 ---
 
@@ -734,117 +852,60 @@ You can change these in `config.yaml -> paths.*`. Directories are created automa
 ### TL;DR sequence
 
 ```bash
-# (once) setup
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-# optionally: pip install -e ".[dev]" or ".[radio]"
-cp configs/example_local.yaml config.yaml  # edit paths inside
-
-# run a step (or all)
-python -m meerkat_corr_imaging.cli vis  --config config.yaml
-python -m meerkat_corr_imaging.cli cal  --config config.yaml
-python -m meerkat_corr_imaging.cli src  --config config.yaml
-python -m meerkat_corr_imaging.cli xm   --config config.yaml
-python -m meerkat_corr_imaging.cli pos  --config config.yaml
-python -m meerkat_corr_imaging.cli flux --config config.yaml
-# or
-python -m meerkat_corr_imaging.cli images --config config.yaml  # image-domain only
-python -m meerkat_corr_imaging.cli all  --config config.yaml
+# Once: install and activate an environment with the required radio dependencies.
+python -m pip install -e .
+tmux new -s mk-analysis
+# Edit dataset.yaml and noise.yaml first; see the fresh-dataset workflow above.
+# Conditional: cal for uncorrected inputs or new CASA imaging.
+# meerkat-ci cal --config dataset.yaml
+meerkat-ci vis --config dataset.yaml
+# Conditional: extract missing low/high images before configuring final products.
+# meerkat-ci low_high_slice --config dataset.yaml
+meerkat-ci sensitivity --config noise.yaml
+meerkat-ci noise-report --config noise.yaml --reuse-sensitivity
 ```
 
-> **To do:** add a `Makefile` with shortcuts (`make vis`, `make all`) and a tiny `examples/tiny-demo` config for a reproducible miniature run.
+For explicit manual analysis instead of `noise-report`, after image preparation
+run `sensitivity → src → xm → pos → flux → report` with an analysis config
+containing all required handoffs. Do not run multiple grouped modes as consecutive
+steps: each is an alternative launch route.
 
 ---
 
-## Reproducibility & Provenance
+## Refresh reports from existing products
 
-* **Config-driven I/O**: all paths and parameters live in YAML configs under `configs/`
-* **Version capture**: store `metadata.json` per run with:
+Choose the earliest stage affected by the change. Keep the original image/visibility selections and reference association; use fresh output paths for local survey matches, which refuse overwrites.
 
-  * Python & package versions, CASA version
-  * Git commit hash
-  * Effective configuration
-* **Deterministic figures**: set random seeds where relevant; close Matplotlib figures (`plt.close('all')`) between steps
-* **Large files**: track with Git LFS or reference them via `examples/tiny-demo` for quick tests
+| Change / available products | Required rerun |
+| --- | --- |
+| Only report wording/config; valid matched tables and sensitivity JSON exist | `pos`, `flux`, and/or `report` as needed |
+| Matching radius/settings or catalogue content changes | `xm` → `pos` → `flux` → `report` |
+| PyBDSF settings or input images change | `src` (enable overwrite when replacing catalogues) → `xm` → `pos` → `flux` → `report`; regenerate sensitivity for changed images/selections |
+| Visibilities, flags, calibration or selections change | Reassess image provenance; `vis`, sensitivity regeneration and affected image/catalogue stages before reporting |
 
----
-
-## Examples & Tests
-
-* **`examples/tiny-demo/`**: a minimal dataset and config to run the full pipeline quickly.
-* **Tests** (`pytest`):
-
-  * `test_config.py` — config loading/validation
-  * `test_paths.py` — path conventions
-  * `test_smoke_pipeline.py` — end-to-end smoke test on the tiny demo
-
-Run:
+For a manually wired analysis config with existing matches and valid sensitivity:
 
 ```bash
-pytest -q
+meerkat-ci pos --config analysis.yaml
+meerkat-ci flux --config analysis.yaml
+meerkat-ci report --config analysis.yaml
+# Only the consolidated report is required? Run just the last command.
 ```
 
----
+Keep `extra.positions`, `extra.flux`, image/catalogue pairs, the sensitivity JSON path and identical `extra.sensitivity.products` associations in that config. A standalone `report` does not require rerunning `pos` or `flux` to create their DOCX files. Each CLI invocation exports the DOCX files it writes to PDF.
 
-## Legacy Scripts
+For the automatic noise-workflow route:
 
-Historical code is preserved (read-only) under **`legacy scripts/`**. This keeps provenance while avoiding confusion with the current workflow.
-
----
-
-## Development Practices
-
-* **Pre-commit hooks**:
-
-  ```bash
-  pre-commit run --all-files
-  ```
-
-  Includes `black`, `ruff`, `isort`, trailing whitespace and EOF fixers.
-
-* **Type hints & logging**:
-
-  * Add type annotations for new/edited functions
-  * Use structured logging: `%(asctime)s %(levelname)s %(name)s: %(message)s`
-  * Prefer pure, testable functions in `src/…/steps/`; keep `scripts/` as thin entrypoints
-
-* **Subprocess hygiene**:
-  Use `subprocess.run([...])` (list form) to call CASA or other tools, not `os.system`.
-
-* **Data handling**:
-  Use `pathlib.Path`; avoid hard-coded paths in code; everything should flow from `config.yaml`.
-
----
-
-## Contributing
-
-1. Create a feature branch:
-
-   ```bash
-   git switch -c repo-reorg-YYYY-MM-DD
-   ```
-2. Make changes with tests where appropriate.
-3. Run `pre-commit` and `pytest`.
-4. Push and open a Pull Request for review.
-
-For large artifacts, prefer small demo files and reproducible steps over committing entire datasets.
-
----
-
-## Citation
-
-If this work contributes to published research, please cite the repository.
-
-```
-@misc{MeerKAT-Correlator-Imaging-Tests,
-  author       = {Legodi, L. S and collaborators},
-  title        = {MeerKAT Correlator Upgrade — Imaging Tests},
-  year         = {2025},
-  howpublished = {\url{https://github.com/Sam-Legodi/MeerKAT-correlator-upgrade-imaging-tests}}
-}
+```bash
+meerkat-ci noise-report --config noise.yaml --reuse-sensitivity
 ```
 
----
+This still runs `src`, `xm`, `pos`, `flux` and `report`; with `pybdsf.overwrite: false` it reuses existing deterministic PyBDSF FITS catalogues. Reuse does not validate their freshness or source-finding settings. Omit `--reuse-sensitivity` to regenerate the JSON first.
+
+Reuse sensitivity only while its image/selection associations and underlying MS remain valid. Consumers check recorded image identities and configured associations but do not reopen MSs to detect later flag/visibility changes. Regenerate after those changes and retain the generating config with the JSON. Historical [report-refresh configurations](configs/report_refresh/README.md) use explicit handoffs; follow their individual-step instructions and add product-specific sensitivity associations when needed, rather than assuming they already contain sensitivity JSON wiring.
+
+
+## Detailed behaviour and advanced workflows
 
 ### Draft reports and terminal sessions
 
@@ -1191,3 +1252,97 @@ same visibility selections; an additional column/JSON comparison is then
 measured using the same annulus. Non-PB annular noise can still include imaging
 weighting, taper, confusion and calibration effects. Known weighting/taper is
 recorded as context, never silently corrected.
+
+---
+
+## Reproducibility & Provenance
+
+* **Config-driven I/O**: all paths and parameters live in YAML configs under `configs/`
+* **Version capture**: store `metadata.json` per run with:
+
+  * Python & package versions, CASA version
+  * Git commit hash
+  * Effective configuration
+* **Deterministic figures**: set random seeds where relevant; close Matplotlib figures (`plt.close('all')`) between steps
+* **Large files**: track with Git LFS or reference them via `examples/tiny-demo` for quick tests
+
+---
+
+## Examples & Tests
+
+* **Configs:** start with `configs/example_local.yaml`; use `configs/noise_report/` for sensitivity-driven analysis and `configs/paired_astrometry/` for opt-in CASA paired imaging.
+* **Tests** (`pytest`):
+
+  * `test_config_path_vars.py` — composable configuration paths
+  * `test_image_pipeline.py` — deterministic image-stage handoffs
+  * `test_sensitivity_workflow.py` — sensitivity generation, provenance and noise handoffs
+  * `test_output_audit.py` / `test_report_runtime.py` — output inventory and report finalization
+  * `test_survey_xmatch.py` — local catalogue matching
+
+Run:
+
+```bash
+pytest -q
+```
+
+---
+
+## Legacy Scripts
+
+Historical code is preserved under **`legacy_scripts/`**. This keeps provenance while avoiding confusion with the current workflow.
+
+---
+
+## Development Practices
+
+* **Pre-commit hooks**:
+
+  ```bash
+  pre-commit run --all-files
+  ```
+
+  Includes `black`, `ruff`, `isort`, trailing whitespace and EOF fixers.
+
+* **Type hints & logging**:
+
+  * Add type annotations for new/edited functions
+  * Use structured logging: `%(asctime)s %(levelname)s %(name)s: %(message)s`
+  * Prefer pure, testable functions in `src/…/steps/`; keep `scripts/` as thin entrypoints
+
+* **Subprocess hygiene**:
+  Use `subprocess.run([...])` (list form) to call CASA or other tools, not `os.system`.
+
+* **Data handling**:
+  Use `pathlib.Path`; avoid hard-coded paths in code; everything should flow from `config.yaml`.
+
+---
+
+## Contributing
+
+1. Create a feature branch:
+
+   ```bash
+   git switch -c repo-reorg-YYYY-MM-DD
+   ```
+2. Make changes with tests where appropriate.
+3. Run `pre-commit` and `pytest`.
+4. Push and open a Pull Request for review.
+
+For large artifacts, prefer small demo files and reproducible steps over committing entire datasets.
+
+---
+
+## Citation
+
+If this work contributes to published research, please cite the repository.
+
+```
+@misc{MeerKAT-Correlator-Imaging-Tests,
+  author       = {Legodi, L. S and collaborators},
+  title        = {MeerKAT Correlator Upgrade — Imaging Tests},
+  year         = {2025},
+  howpublished = {\url{https://github.com/Sam-Legodi/MeerKAT-correlator-upgrade-imaging-tests}}
+}
+```
+
+---
