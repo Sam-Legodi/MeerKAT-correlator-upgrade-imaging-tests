@@ -211,6 +211,14 @@ class StepAudit:
         return lines
 
     def print_summary(self, exception: Optional[BaseException]) -> None:
+        from .output_audit import CURRENT_RUN
+        run = CURRENT_RUN.get()
+        if run is not None and run.active is not None:
+            run.record_step_audit(self, exception)
+            # Keep a summary in this step's log, but defer terminal output.
+            with self.log_path.open("a", encoding="utf-8") as stream:
+                stream.write("\n".join(self._summary_lines(exception)) + "\n")
+            return
         print("\n".join(self._summary_lines(exception)))
 
 
@@ -314,7 +322,7 @@ def run_step_with_audit(
     runner: Callable[[], _T],
 ) -> _T:
     """Run one pipeline step, then audit and summarize its combined log."""
-    audit_dir = Path(reports_dir).expanduser() / "pipeline_audits"
+    audit_dir = Path(reports_dir).expanduser().resolve() / "pipeline_audits"
     audit_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     safe_step = _SAFE_STEP_RE.sub("_", step_name).strip("_") or "step"

@@ -15,7 +15,7 @@ reference:
   name: CMC1_1785941476_4kL
   ms_paths: []
   images:
-  - /Users/samuel/SARAO/MK+/Correlator/GPU_Correlator_Commissioning/Obsevations/1785941480_cmc1_n10732kL/images/4kwide/1785941476_continuum_image_J2147-8132_IClean_PB.fits
+  - /Users/samuel/SARAO/MK+/Correlator/GPU Correlator Commisioning/Obsevations/1785941476_cmc14kL/images/1785941476_continuum_image_J2147-8132_IClean_PB.fits
 tests:
 - name: GPU_1784437450_32kL
   images:

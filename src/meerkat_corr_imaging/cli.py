@@ -10,6 +10,7 @@ import traceback
 from pathlib import Path
 from .output_paths import export_pdf
 from .audit import run_step_with_audit
+from .output_audit import RunOutputAudit
 from .config import load_config
 from .image_pipeline import wire_image_pipeline
 from .sensitivity_workflow import generate, wire_noise_pipeline, load, json_path, configured_products
@@ -124,6 +125,11 @@ def main(argv=None):
     if args.no_imaging:
         cfg.casa.imaging_enabled = False
 
+    with RunOutputAudit(cfg) as output_audit:
+        _run_pipeline(args, cfg, output_audit)
+
+
+def _run_pipeline(args, cfg, output_audit):
     if args.cmd == "noise-report":
         wire_noise_pipeline(cfg)
         if args.reuse_sensitivity:
@@ -155,8 +161,9 @@ def main(argv=None):
         try:
             for command_name in requested_steps:
                 step_name, runner = STEP_RUNNERS[command_name]
-                run_step_with_audit(step_name, cfg.paths.reports_dir,
-                                    lambda runner=runner: runner(cfg))
+                with output_audit.step(command_name, step_name, manifest):
+                    run_step_with_audit(step_name, cfg.paths.reports_dir,
+                                        lambda runner=runner: runner(cfg))
         except Exception:
             traceback.print_exc()
             failed = True
@@ -166,20 +173,20 @@ def main(argv=None):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-            reports = sorted(set(json.loads(line) for line in manifest.read_text().splitlines())) if manifest.exists() else []
-            produced = []
-            for report in reports:
-                produced.append(report)
-                try:
-                    produced.append(str(export_pdf(report)))
-                except Exception as exc:
-                    print(f"[REPORT] PDF export failed for {report}: {exc}")
-                    failed = True
-            summary = "[REPORTS] Produced report files:\n" + ("\n".join(produced) or "(none)") + "\n"
-            report_dir = Path(cfg.paths.reports_dir).expanduser()
-            report_dir.mkdir(parents=True, exist_ok=True)
-            (report_dir / "produced_reports.log").write_text(summary, encoding="utf-8")
-            print(summary, end="", flush=True)
+            with output_audit.finalization():
+                reports = sorted(set(json.loads(line) for line in manifest.read_text().splitlines())) if manifest.exists() else []
+                produced = []
+                for report in reports:
+                    produced.append(report)
+                    try:
+                        produced.append(str(export_pdf(report)))
+                    except Exception as exc:
+                        print(f"[REPORT] PDF export failed for {report}: {exc}")
+                        failed = True
+                summary = "[REPORTS] Produced report files:\n" + ("\n".join(produced) or "(none)") + "\n"
+                report_dir = Path(cfg.paths.reports_dir).expanduser()
+                report_dir.mkdir(parents=True, exist_ok=True)
+                (report_dir / "produced_reports.log").write_text(summary, encoding="utf-8")
     if failed:
         raise SystemExit(1)
 

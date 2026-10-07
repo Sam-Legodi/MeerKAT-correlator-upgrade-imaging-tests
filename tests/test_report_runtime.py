@@ -39,9 +39,11 @@ def test_session_confirmation(monkeypatch, capsys, answer, continues):
     assert f'screen -S {session}' in output
 
 
-def test_final_reports_after_audit(monkeypatch, tmp_path, capsys):
+def test_final_reports_under_step_audit(monkeypatch, tmp_path, capsys):
+    from meerkat_corr_imaging.config import Config, PathsCfg, Target
     monkeypatch.setenv('TMUX', 'session')
-    cfg = SimpleNamespace(paths=SimpleNamespace(reports_dir=tmp_path), tests=[], reference=SimpleNamespace(name='epoch'))
+    cfg = Config(project_name='reports', paths=PathsCfg(reports_dir=str(tmp_path),
+                 interim_dir=str(tmp_path / 'interim')), reference=Target(name='epoch'))
     monkeypatch.setattr(cli, 'load_config', lambda _: cfg)
     docx = tmp_path / 'draft_epoch.docx'
     def runner(cfg):
@@ -49,11 +51,22 @@ def test_final_reports_after_audit(monkeypatch, tmp_path, capsys):
         document.save.side_effect = lambda path: Path(path).write_bytes(b'docx')
         output_paths.save_report(document, docx)
     monkeypatch.setattr(cli, 'STEP_RUNNERS', {'vis': ('vis', runner)})
-    monkeypatch.setattr(cli, 'export_pdf', lambda path: Path(path).with_suffix('.pdf'))
+    def export_pdf(path):
+        target = Path(path).with_suffix('.pdf')
+        target.write_bytes(b'pdf')
+        print('PDF export finished')
+        return target
+    monkeypatch.setattr(cli, 'export_pdf', export_pdf)
     cli.main(['--config', 'config.yaml', 'vis'])
     output = capsys.readouterr().out
-    assert output.endswith(f'{docx}\n{docx.with_suffix(".pdf")}\n')
-    assert (tmp_path / 'produced_reports.log').read_text() in output
+    assert output.index('PDF export finished') < output.index('[AUDIT] Inputs:')
+    assert output.count('[AUDIT] Run output summary:') == 1
+    assert f'NEW         {docx}' in output
+    assert f'NEW         {docx.with_suffix(".pdf")}' in output
+    assert f'NEW         {tmp_path / "produced_reports.log"}' in output
+    assert '[REPORTS] Produced report files:' not in output
+    assert (tmp_path / 'produced_reports.log').read_text() == (
+        f'[REPORTS] Produced report files:\n{docx}\n{docx.with_suffix(".pdf")}\n')
 
 
 def test_native_pdf_export_without_external_commands(monkeypatch, tmp_path):

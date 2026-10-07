@@ -60,9 +60,11 @@ def plot_product(table, bmaj, mode, tag, index, path):
         ax.plot(x, y, 'k.', alpha=.7, label=f'{mode} {tag.upper()} matched sources')
         ellipse(ax, x, y, 'black', 'Descriptive', ' arcsec' if index == 3 else '')
         ax.errorbar(x, y, xerr=ee/scale, yerr=ne/scale, fmt='none', alpha=.3, color='gray')
-        if index == 3 and tag == 'mfs':
+        if index == 3:
             ax.axvline(np.mean(x), color='red', lw=1.2, zorder=3)
             ax.axhline(np.mean(y), color='red', lw=1.2, zorder=3)
+            ax.axvline(0, color='black', ls='--', lw=1.2, zorder=4)
+            ax.axhline(0, color='black', ls='--', lw=1.2, zorder=4)
         ax.set_aspect('equal', adjustable='datalim')
         ax.set(xlabel='ΔRA / Bmaj' if index == 2 else 'ΔRA (arcsec)',
                ylabel='ΔDec / Bmaj' if index == 2 else 'ΔDec (arcsec)',
@@ -161,6 +163,12 @@ def main():
                 index = (int(number)-10) % 6
                 replacement[str(latest.partname).lstrip('/')] = images[(mode, TAGS[label], index)].read_bytes()
                 count += 1
+                if index == 3:
+                    caption = paragraph.text.replace(' Red lines intersect at the ellipse centre.', '')
+                    caption = caption.replace(' Red lines intersect at the ellipse centre; dashed black lines intersect at (0,0).', '')
+                    paragraph.runs[0].text = caption + ' Red lines intersect at the ellipse centre; dashed black lines intersect at (0,0).'
+                    for run in paragraph.runs[1:]:
+                        run.text = ''
         assert count == 72, (docpath, count)
         # Explain corrected formal errors without changing statistical definitions.
         note = ('Catalogue error convention: PyBDSF E_RA is an on-sky angular uncertainty. '

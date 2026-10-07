@@ -667,9 +667,18 @@ Order:
 
 Each sub-step logs the exact command it runs. Missing inputs cause a polite skip with a message.
 
-Immediately after every requested step, the CLI audits the combined stdout/stderr
-log and prints an input-level summary: succeeded, failed, and not-run inputs. The
-same summary and complete command output are retained under
+Each requested step audits its combined stdout/stderr log and records succeeded,
+failed, and not-run inputs. The CLI prints these summaries together once at the
+end of the whole run, including failed runs and keyboard interrupts. Under each
+`[AUDIT] Inputs:` line, `[AUDIT]  Outputs:` lists absolute output paths marked
+`NEW`, `OVERWRITTEN`, or `UNCHANGED`. Logs are included; intermediate files in
+the configured interim directory and CASA/PyBDSF work tables are grouped by
+their parent folder. DOCX/PDF reports remain individually listed, including PDFs
+exported during finalization. Unchanged files are listed only in the requested
+step's output locations; unrelated historical reports are omitted. File metadata
+before and after each step distinguishes rewrites from unchanged files.
+
+Input summaries and complete command output are retained under
 `<reports_dir>/pipeline_audits/<timestamp>_<step>.log`. Steps with independent
 inputs attempt all of them before reporting failure, so one bad image, MS, or
 catalogue pair does not hide the status of the remaining inputs. The `all`
@@ -855,10 +864,11 @@ dependencies. No external converter or additional installation is required.
 Paragraphs, tables and embedded figures are retained in document order; PDF
 pagination and styling are independent of Word layout. An export failure
 retains the DOCX, prints the reason, and makes the CLI exit with status 1.
-The final terminal/stdout block lists the produced DOCX and PDF paths after all
-step audit summaries. The same block is saved to `produced_reports.log` in the
-configured reports directory (replaced on each run). It includes only reports
-written by that invocation; historical outputs are not scanned.
+The final audit lists DOCX and PDF paths under the step that produced them.
+A report-only list is also saved to `produced_reports.log` in the configured
+reports directory (replaced on each run), whose path appears under
+`[AUDIT] Step: run_finalization`. That log includes only reports written by that
+invocation.
 
 ### Visibility plots and reference reuse
 
